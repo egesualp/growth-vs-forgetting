@@ -2,7 +2,8 @@
 
 This repository contains the implementation and experiments for comparing **gradual growth methods**, specifically the G_stack approach, with **naive models trained from scratch**. The project focuses on addressing **catastrophic forgetting** and improving model performance in continuous learning scenarios.
 
-[b]keywords:[/b] probabilistic continuous learning, deterministic and probabilistic fine tuning, catastrophic forgetting, model growth, g_stack, FiLM-Ensemble
+keywords: probabilistic continuous learning, deterministic and probabilistic fine tuning, catastrophic forgetting, model growth, g_stack, FiLM-Ensemble
+
 ---
 
 ## 🚀 Project Objectives
