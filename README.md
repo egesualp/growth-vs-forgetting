@@ -6,7 +6,7 @@ keywords: probabilistic continuous learning, deterministic and probabilistic fin
 
 ---
 
-## 🚀 Project Objectives
+## Objectives
 
 1. Compare the effectiveness of G_stack and naive models in continuous learning tasks.
 2. Investigate the impact of **deterministic** and **probabilistic fine-tuning** on model performance.
@@ -14,7 +14,7 @@ keywords: probabilistic continuous learning, deterministic and probabilistic fin
 
 ---
 
-## 📂 Repository Structure
+## Repository Structure
 
 ```
 gradual-growth-vs-naive-learning/
@@ -35,7 +35,7 @@ gradual-growth-vs-naive-learning/
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 - Python 3.8 or later
@@ -60,7 +60,7 @@ gradual-growth-vs-naive-learning/
 
 ---
 
-## 🛠️ Usage
+## Usage
 
 ### 1. Train Models
 #### Train G_stack Model:
@@ -86,7 +86,7 @@ jupyter notebook notebooks/results_visualization.ipynb
 
 ---
 
-## 📊 Key Features
+## Key Features
 
 - **Gradual Growth (G_stack)**: Plese refer to https://llm-stacking.github.io/
 - **Naive Model Training**: Baseline for evaluating G_stack’s effectiveness.
@@ -95,12 +95,12 @@ jupyter notebook notebooks/results_visualization.ipynb
 
 ---
 
-## 📈 Results
+## Results
 Detailed results, including metrics like ECE and diversity scores, are stored in the `data/results/` directory and visualized in the `notebooks/`.
 
 ---
 
-## 📧 Contact
+## Contact
 For questions or collaboration, contact [Ege Süalp](mailto:e.sualp@campus.lmu.de).
 
 
