@@ -1,0 +1,40 @@
+experiment:
+  name: "continual_learning_comparison"
+  seed: 42
+  device: "cuda"
+
+models:
+  g_stack:
+    base_model: "t5-base"
+    growth_rate: 0.1
+  naive:
+    base_model: "t5-base"
+
+tasks:
+  - name: "text_simplification"
+    dataset: "wiki_auto"
+    metric: ["bleu", "rouge"]
+  - name: "headline_generation"
+    dataset: "cnn_dailymail"
+    metric: ["rouge"]
+  - name: "haiku_generation"
+    dataset: "haiku"
+    metric: ["bleu"]
+  - name: "covid_qa"
+    dataset: "covid_qa"
+    metric: ["accuracy"]
+  - name: "empathetic_dialogue"
+    dataset: "empathetic_dialogues"
+    metric: ["rouge", "bleu"]
+
+rehearsal:
+  rates: [0.0, 0.0025, 0.01]
+  buffer_size: 10000
+  selection_strategy: "random"
+
+training:
+  batch_size: 16
+  learning_rate: 2e-5
+  epochs_per_task: 3
+  gradient_accumulation_steps: 4
+  max_grad_norm: 1.0 
