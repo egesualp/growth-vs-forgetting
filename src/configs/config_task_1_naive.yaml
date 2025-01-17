@@ -1,0 +1,31 @@
+model_name_or_path: "llm-stacking/StackLLM_410M_750BToken"  # Model name or path
+dataset: "../../data/preprocessed/simplification_man_reformatted.json"  # Dataset to use
+dataset_format: "input-output"                              # Dataset format
+output_dir: "../models/GStack_410M_T750B_wiki_auto" 
+trust_remote_code: false
+source_max_len: 512
+target_max_len: 512
+dataset: "alpaca" # Update based on your dataset
+eval_dataset_size: 1024 # Optional based on task evaluation setup
+output_dir: "./output"
+overwrite_output_dir: true
+do_train: true
+do_eval: true
+do_predict: true
+evaluation_strategy: "epoch"
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 4
+gradient_accumulation_steps: 1
+learning_rate: 2e-5
+weight_decay: 0.0
+num_train_epochs: 3
+max_steps: -1
+lr_scheduler_type: "constant"
+logging_steps: 50
+save_strategy: "epoch"
+save_total_limit: 3
+seed: 42
+report_to: wandb                                    # Reporting integrations (e.g., wandb)
+fp16: true
+dataloader_pin_memory: true
+task: 'Simp'

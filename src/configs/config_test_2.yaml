@@ -1,0 +1,67 @@
+# Model and Training Configuration
+
+model_name_or_path: "llm-stacking/StackLLM_410M_750BToken"  # Model name or path
+trust_remote_code: false                          # Trust remote code
+eval_dataset_size: 1024                           # Size of the evaluation dataset
+max_train_samples: 10                           # Max training samples for debugging
+max_eval_samples: 10                            # Max evaluation samples for debugging
+source_max_len: 1024                              # Maximum source sequence length
+target_max_len: 256                               # Maximum target sequence length
+dataset: "../../data/preprocessed/simplification_man_reformatted.json"  # Dataset to use
+dataset_format: "input-output"                              # Dataset format
+output_dir: "../models/GStack_410M_T750B_wiki_auto"                           # Directory to save models
+overwrite_output_dir: false                       # Whether to overwrite the output directory
+
+# Training and Evaluation Settings
+do_train: true                                    # Enable training
+do_eval: true                                     # Enable evaluation
+do_predict: true                                 # Enable prediction
+evaluation_strategy: "steps"                     # Evaluation strategy
+prediction_loss_only: false                       # Only return loss during evaluation
+per_device_train_batch_size: 16                   # Batch size for training
+per_device_eval_batch_size: 8                     # Batch size for evaluation
+gradient_accumulation_steps: 1                    # Steps for gradient accumulation
+#eval_accumulation_steps: null                     # Steps for evaluation accumulation
+eval_delay: 0                                     # Delay before the first evaluation
+learning_rate: 0.0002                             # Learning rate
+weight_decay: 0.0                                 # Weight decay
+adam_beta1: 0.9                                   # Beta1 for Adam optimizer
+adam_beta2: 0.999                                 # Beta2 for Adam optimizer
+adam_epsilon: 1e-08                               # Epsilon for Adam optimizer
+max_grad_norm: 0.3                                # Max gradient norm
+num_train_epochs: 3.0                             # Number of training epochs
+max_steps: 10000                                  # Max optimization steps
+lr_scheduler_type: "constant"                    # Learning rate scheduler type
+warmup_ratio: 0.03                                # Warmup ratio
+warmup_steps: 0                                   # Warmup steps
+
+# Logging and Checkpoints
+log_level: "passive"                              # Log level
+log_level_replica: "warning"                      # Log level for replicas
+log_on_each_node: true                            # Log on each node
+logging_dir: "../logs"                            # Directory for logging
+logging_strategy: "steps"                        # Logging strategy
+logging_first_step: true                         # Log the first step
+logging_steps: 5                                 # Frequency of logging
+logging_nan_inf_filter: true                      # Filter NaN/Inf during logging
+save_strategy: "steps"                           # Save strategy
+save_steps: 250                                   # Save frequency
+save_total_limit: 40                              # Maximum checkpoints to keep
+save_safetensors: false                           # Save safetensors
+save_on_each_node: false                          # Save on each node
+
+# Hardware and Precision
+no_cuda: false                                    # Disable CUDA
+use_mps_device: false                             # Use MPS device
+fp16: false                                       # Enable FP16 precision
+bf16: false                                       # Enable BF16 precision
+gradient_checkpointing: true                      # Enable gradient checkpointing
+
+# Miscellaneous
+seed: 42                                          # Random seed
+dataloader_num_workers: 0                         # Number of workers for DataLoader
+dataloader_pin_memory: true                       # Pin memory for DataLoader
+report_to: wandb                                    # Reporting integrations (e.g., wandb)
+push_to_hub: false                                # Push model to the hub
+generation_max_length: 256                        # Maximum length for generation
+train_on_source: false                            # Train on source inputs
