@@ -449,8 +449,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
     # Map `output` to `labels` for training
     def preprocess_labels(example):
         SYSTEM_PROMPT = (
-            "Below is an instruction that describes a task, paired with an input that provides further "
-            "context. Write a response that appropriately completes the request."
+            "Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request."
         )
         example["input"] = (
         f"<<SYS>>\n{SYSTEM_PROMPT}\n<</SYS>>\n\n"

@@ -6,7 +6,7 @@ dataset_format: "input-output"                              # Dataset format
 output_dir: "../models/GStack_410M_T750B_wiki_auto_2" 
 trust_remote_code: false
 max_length: 512
-max_eval_samples: 256 # Optional based on task evaluation setup
+max_eval_samples: 512 # Optional based on task evaluation setup
 #max_train_samples: 200
 overwrite_output_dir: true
 do_train: false
@@ -33,5 +33,5 @@ seed: 42
 fp16: true
 dataloader_pin_memory: true
 task: 'Simp'
-predict_with_generate: true 
-generation_max_length: 256
+predict_with_generate: false 
+train_on_source: false

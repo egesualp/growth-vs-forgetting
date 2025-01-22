@@ -34,14 +34,11 @@ from transformers import (
     LlamaTokenizer
 
 )
-from datasets import load_dataset, Dataset, DatasetDict
-import evaluate
-
-# task specific metrics
-from nltk.translate.bleu_score import corpus_bleu
+from datasets import load_dataset, Dataset
 from evaluate import load
 sari = load("sari")
 bleu = load("bleu")
+rouge = load("rouge")
 from rouge_score import rouge_scorer
 from bert_score import score as bert_score
 
@@ -178,9 +175,6 @@ class GenerationArguments:
 
 def get_accelerate_model(args, checkpoint_dir):
 
-
-
-
     device_map = "auto"
 
     # if we are in a distributed setting, we need to set the device map and max memory per device
@@ -188,16 +182,12 @@ def get_accelerate_model(args, checkpoint_dir):
         local_rank = int(os.environ.get('LOCAL_RANK', '0'))
         device_map = {'': local_rank}
 
-
     print(f'loading base model {args.model_name_or_path}...')
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         device_map=device_map,
         trust_remote_code=args.trust_remote_code,
     )
-
-
-
 
     # Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -212,6 +202,10 @@ def get_accelerate_model(args, checkpoint_dir):
             chat_special_tokens = ["<|im_start|>", "<|im_end|>"]
             special_tokens_dict.update(additional_special_tokens=chat_special_tokens)
 
+        special_tokens_dict.update(
+            additional_special_tokens=['<<SYS>>', '<</SYS>>', '[INST]', '[/INST]']
+        )
+        
         smart_tokenizer_and_embedding_resize(
             special_tokens_dict=special_tokens_dict,
             tokenizer=tokenizer,
@@ -259,53 +253,6 @@ def smart_tokenizer_and_embedding_resize(
         output_embeddings_data[-num_new_tokens:] = output_embeddings_avg
     print(f"Resized tokenizer and embedding to {len(tokenizer)} tokens.")
 
-# new collator with gpt
-#@dataclass
-#class DataCollatorForCausalLM:
-#    tokenizer: transformers.PreTrainedTokenizer
-#    source_max_len: int
-#    target_max_len: int
-#    train_on_source: bool
-#    predict_with_generate: bool
-#    def __call__(self, instances):
-#        # Tokenize inputs and labels
-#        sources = [f"{self.tokenizer.bos_token}{example['input']}" for example in instances]
-#        targets = [f"{example['labels']}{self.tokenizer.eos_token}" for example in instances]
-#
-#        tokenized_sources = self.tokenizer(
-#            sources, max_length=self.source_max_len, truncation=True, add_special_tokens=False
-#        )
-#        tokenized_targets = self.tokenizer(
-#            targets, max_length=self.target_max_len, truncation=True, add_special_tokens=False
-#        )
-#
-#        input_ids = [torch.tensor(source + target) for source, target in zip(
-#            tokenized_sources["input_ids"], tokenized_targets["input_ids"]
-#        )]
-#        if self.predict_with_generate:
-#            labels = [
-#                torch.tensor(target) for target in tokenized_targets["input_ids"]
-#            ]
-#            
-#        else:
-#            labels = [
-#                torch.tensor([IGNORE_INDEX] * len(source) + target)
-#                for source, target in zip(tokenized_sources["input_ids"], tokenized_targets["input_ids"])
-#            ]
-#
-#
-#        input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
-#        if not self.predict_with_generate:
-#            labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX)
-#        else:
-#            labels = None
-#
-#        return {
-#            "input_ids": input_ids,
-#            "attention_mask": input_ids.ne(self.tokenizer.pad_token_id),
-#            "labels": labels,  # Include labels regardless of predict_with_generate
-#        }
-
 @dataclass
 class DataCollatorForCausalLM(object):
     tokenizer: transformers.PreTrainedTokenizer
@@ -315,16 +262,11 @@ class DataCollatorForCausalLM(object):
     predict_with_generate: bool
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        # Debugging: Ensure keys are present
-        assert all('input' in instance and 'labels' in instance for instance in instances), \
-            "Each instance must have 'input' and 'labels' keys."
-
         # Extract elements
         sources = [f"{self.tokenizer.bos_token}{example['input']}" for example in instances]
-        targets = [f"{example['labels']}{self.tokenizer.eos_token}" for example in instances]
-
+        targets = [f"{example['label']}{self.tokenizer.eos_token}" for example in instances]
         # Tokenize
-        tokenized_sources = self.tokenizer(
+        tokenized_sources_with_prompt = self.tokenizer(
             sources,
             max_length=self.source_max_len,
             truncation=True,
@@ -336,32 +278,33 @@ class DataCollatorForCausalLM(object):
             truncation=True,
             add_special_tokens=False,
         )
-
-        # Build input_ids and labels
+        # Build the input and labels for causal LM
         input_ids = []
         labels = []
         for tokenized_source, tokenized_target in zip(
-            tokenized_sources['input_ids'], tokenized_targets['input_ids']
+            tokenized_sources_with_prompt['input_ids'],
+            tokenized_targets['input_ids']
         ):
-            combined_input = tokenized_source + tokenized_target
             if not self.predict_with_generate:
-                input_ids.append(torch.tensor(combined_input))
-                labels.append(
-                        torch.tensor([IGNORE_INDEX] * len(tokenized_source) + tokenized_target)
+                input_ids.append(torch.tensor(tokenized_source + tokenized_target))
+                if not self.train_on_source:
+                    labels.append(
+                        torch.tensor([IGNORE_INDEX for _ in range(len(tokenized_source))] + copy.deepcopy(tokenized_target))
                     )
+                else:
+                    labels.append(torch.tensor(copy.deepcopy(tokenized_source + tokenized_target)))
             else:
                 input_ids.append(torch.tensor(tokenized_source))
-
         # Apply padding
         input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
         labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX) if not self.predict_with_generate else None
-
-        return {
+        data_dict = {
             'input_ids': input_ids,
-            'attention_mask': input_ids.ne(self.tokenizer.pad_token_id),
-            'labels': labels
+            'attention_mask':input_ids.ne(self.tokenizer.pad_token_id),
         }
-
+        if labels is not None:
+            data_dict['labels'] = labels
+        return data_dict
 
 def extract_unnatural_instructions_data(examples, extract_reformulations=False):
     out = {
@@ -400,13 +343,18 @@ def extract_alpaca_dataset(example):
         prompt_format = ALPACA_PROMPT_DICT["prompt_no_input"]
     return {'input': prompt_format.format(**example)}
 
-def local_dataset(dataset_name):
+def local_dataset(dataset_name, args):
     if dataset_name.endswith('.json') or dataset_name.endswith('.jsonl'):
-        train_dataset = Dataset.from_json(path_or_paths=dataset_name, field='train')
-        eval_dataset = Dataset.from_json(path_or_paths=dataset_name, field='eval')
-        test_dataset = Dataset.from_json(path_or_paths=dataset_name, field='test')
-        full_dataset = {'train': train_dataset, 'eval': eval_dataset, 'test': test_dataset}
-        #full_dataset = Dataset.from_json(path_or_paths=dataset_name)
+        full_dataset = dict()
+        if args.do_train:
+            train_dataset = Dataset.from_json(path_or_paths=dataset_name, field='train')
+            full_dataset['train'] = train_dataset
+        if args.do_eval:
+            eval_dataset = Dataset.from_json(path_or_paths=dataset_name, field='eval')
+            full_dataset['eval'] = eval_dataset
+        if args.do_predict:
+            test_dataset = Dataset.from_json(path_or_paths=dataset_name, field='test')
+            full_dataset['test'] = test_dataset
     elif dataset_name.endswith('.csv'):
         full_dataset = Dataset.from_pandas(pd.read_csv(dataset_name))
     elif dataset_name.endswith('.tsv'):
@@ -414,7 +362,6 @@ def local_dataset(dataset_name):
     else:
         raise ValueError(f"Unsupported dataset format: {dataset_name}")
 
-    #split_dataset = full_dataset.train_test_split(test_size=0.1)
     return full_dataset
 
 def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
@@ -441,17 +388,14 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         - vicuna
 
     """
-    # Map `output` to `labels` for training
-    def preprocess_labels(example):
+    def preprocess_custom_data(example):
         SYSTEM_PROMPT = (
-            "Below is an instruction that describes a task, paired with an input that provides further "
-            "context. Write a response that appropriately completes the request."
+            "Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request."
         )
         example["input"] = (
         f"<<SYS>>\n{SYSTEM_PROMPT}\n<</SYS>>\n\n"
         f"[INST]\n{example['input']}\n[/INST]\n"
             )
-        example["labels"] = example["output"]
         return example
     
     def load_data(dataset_name):
@@ -472,9 +416,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         elif dataset_name == 'vicuna':
             raise NotImplementedError("Vicuna data was not released.")
         else:
-            print(f"Attempting to load dataset: {dataset_name}")
             if os.path.exists(dataset_name):
-                print(f"Dataset file found at: {dataset_name}")
                 try:
                     args.dataset_format = args.dataset_format if args.dataset_format else "input-output"
                     full_dataset = local_dataset(dataset_name)
@@ -512,9 +454,9 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             # leave as is
             pass
         # Remove unused columns.
-        #dataset = dataset.remove_columns(
-        #    [col for col in dataset.column_names['train'] if col not in ['input', 'output']]
-        #)
+        dataset = dataset.remove_columns(
+            [col for col in dataset.column_names['train'] if col not in ['input', 'output', 'labels']]
+        )
         return dataset
 
      # Load dataset.
@@ -522,19 +464,14 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
     dataset = format_dataset(dataset, args.dataset_format)
  
     # Split train/eval, reduce size
-    if args.do_train:
-        print('DEBUGGER: args.do_train is running')
-        train_dataset = dataset['train']
-        train_dataset = train_dataset.map(preprocess_labels)  # Preprocess to include system prompt
-        if args.max_train_samples is not None and len(train_dataset) > args.max_train_samples:
-            train_dataset = train_dataset.select(range(args.max_train_samples))
-        if args.group_by_length:
-            train_dataset = train_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
-
+    if args.do_predict:
+        if 'test' in dataset:
+            predict_dataset = dataset['test']
+            predict_dataset = predict_dataset.map(preprocess_custom_data)
     if args.do_eval or args.do_predict:
         if 'eval' in dataset:
             eval_dataset = dataset['eval']
-            eval_dataset = eval_dataset.map(preprocess_labels)  # Preprocess to include system prompt
+            eval_dataset = eval_dataset.map(preprocess_custom_data)
         else:
             print('Splitting train dataset in train and validation according to `eval_dataset_size`')
             dataset = dataset["train"].train_test_split(
@@ -545,12 +482,13 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             eval_dataset = eval_dataset.select(range(args.max_eval_samples))
         if args.group_by_length:
             eval_dataset = eval_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
-
-    if args.do_predict:
-        predict_dataset = dataset['test']
-        predict_dataset = predict_dataset.map(preprocess_labels)  # Preprocess to include system prompt
-        if args.max_eval_samples is not None:
-            predict_dataset = predict_dataset.select(range(args.max_eval_samples))
+    if args.do_train:
+        train_dataset = dataset['train']
+        train_dataset = train_dataset.map(preprocess_custom_data)
+        if args.max_train_samples is not None and len(train_dataset) > args.max_train_samples:
+            train_dataset = train_dataset.select(range(args.max_train_samples))
+        if args.group_by_length:
+            train_dataset = train_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
 
     data_collator = DataCollatorForCausalLM(
         tokenizer=tokenizer,
@@ -559,12 +497,10 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         train_on_source=args.train_on_source,
         predict_with_generate=args.predict_with_generate,
     )
-    #print('DEBUGGER: printing train data set row')
-    #print(train_dataset[0])
     return dict(
         train_dataset=train_dataset if args.do_train else None,
         eval_dataset=eval_dataset if args.do_eval else None,
-        predict_dataset=eval_dataset if args.do_predict else None,
+        predict_dataset=predict_dataset if args.do_predict else None,
         data_collator=data_collator
     )
 
@@ -607,29 +543,6 @@ def config_selection():
 
     return yaml_config
 
-def compute_bleu_sari(predictions, references):
-    """
-    Compute BLEU and SARI for text simplification (Simp).
-    Args:
-        predictions (list of str): Simplified texts generated by the model.
-        references (list of list of str): Reference simplifications.
-        sources (list of str): Original source texts.
-    Returns:
-        dict: BLEU and SARI scores.
-    """
-    # Load the BLEU and SARI metrics
-    #bleu = load("bleu")
-    #sari = load("sari")
-
-    # Compute BLEU score
-    bleu_score = bleu.compute(predictions=predictions, references=references)
-
-    # Compute SARI score
-    #sari_score = sari.compute(sources=sources, predictions=predictions, references=references)
-
-    #return {"bleu": bleu_score["bleu"], "sari": sari_score["sari"]}
-    return {"bleu": bleu_score["bleu"]}
-
 def compute_rouge(predictions, references):
     """
     Compute ROUGE score using the evaluate library.
@@ -655,101 +568,55 @@ def compute_bert_score(predictions, references):
     P, R, F1 = bert_score(predictions, references, lang='en', rescale_with_baseline=True)
     return {"bertscore_f1": F1.mean().item()}
 
-def compute_metrics(pred, tokenizer, task="Simp"):
+def compute_metrics(eval_preds, eval_labels, inputs, tokenizer, task="Simp"):
     """
-    Compute metrics using predictions, labels, and normal_sentences from inputs.
+    Compute metrics using predictions, labels, and aligned normal_sentence.
     Args:
-        pred: EvalPrediction object containing predictions, labels, and normal_sentences.
+        pred: EvalPrediction containing predictions, labels, and inputs.
         tokenizer: Tokenizer for decoding.
         task: Task type (e.g., Simp for simplification).
     """
-    logits = pred.predictions
-    labels = pred.label_ids
-    normal_sentences = pred.inputs  # Access normal_sentences here
+    # Extract batch predictions, labels, and inputs
+    logits = eval_preds
+    labels = eval_labels
 
     # Decode predictions
     pred_class = np.argmax(logits, axis=-1)
-    decoded_predictions = tokenizer.batch_decode(
+    dec_preds = tokenizer.batch_decode(
         pred_class, skip_special_tokens=True, clean_up_tokenization_spaces=True
     )
 
     # Decode labels
     labels = np.where(labels == -100, tokenizer.pad_token_id, labels)
-    decoded_labels = tokenizer.batch_decode(
+    dec_labels = tokenizer.batch_decode(
         labels, skip_special_tokens=True, clean_up_tokenization_spaces=True
     )
+    
+    # Perplexity calculation
+    log_probs = -np.log(np.exp(logits) / np.sum(np.exp(logits), axis=-1, keepdims=True))
+    token_loss = np.sum(log_probs * (labels != tokenizer.pad_token_id), axis=-1)
+    total_loss = np.sum(token_loss)  # Total loss
+    num_tokens = np.sum(labels != tokenizer.pad_token_id)  # Non-padding tokens
+    perplexity = np.exp(total_loss / num_tokens) if num_tokens > 0 else float("inf")
 
     # Compute metrics
     metrics = {}
     if task == "Simp":
         # Compute BLEU
-        bleu_score = bleu.compute(predictions=decoded_predictions, references=decoded_labels)
+        bleu_score = bleu.compute(predictions=dec_preds, references=dec_labels)
+        rouge_score = rouge.compute(predictions=dec_preds, references=dec_labels)
 
-        # Compute SARI
-        sari_score = sari.compute(
-            sources=normal_sentences, predictions=decoded_predictions, references=[[label] for label in decoded_labels]
-        )
-
-        metrics["bleu"] = bleu_score["bleu"]
-        metrics["sari"] = sari_score["sari"]
-
-    return metrics
-
-class CustomSeq2SeqTrainer(Seq2SeqTrainer):
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
-        if self.args.predict_with_generate:
-            # Perform generation with all relevant parameters
-            generated_tokens = model.generate(
-                inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                max_length=getattr(self.args, "generation_max_length", 256),
-                num_beams=getattr(self.args, "num_beams", 1),
-                temperature=getattr(self.args, "temperature", 1.0),
-                top_k=getattr(self.args, "top_k", 50),
-                top_p=getattr(self.args, "top_p", 0.9),
-                length_penalty=getattr(self.args, "length_penalty", 1.0),  # Add length_penalty
-                eos_token_id=self.tokenizer.eos_token_id,
-            )
-            labels = inputs.get("labels")
-            return None, generated_tokens, labels
-        else:
-            # Default behavior for non-generation mode
-            return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+        return {"bleu": bleu_score["bleu"], 
+                'rouge1': rouge_score['rouge1'],
+                'rouge2': rouge_score['rouge2'],
+                'rougeL': rouge_score['rougeL'], 
+                "perplexity": perplexity
+                }
+    elif task == "HGen":
+        return compute_rouge(dec_preds, dec_labels)
+    else:
+        return compute_bert_score(dec_preds, dec_labels)
     
-    def evaluation_loop(
-        self,
-        dataloader,
-        description: str,
-        prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[List[str]] = None,
-        metric_key_prefix: str = "eval",
-    ):
-        """
-        Override evaluation_loop to collect normal_sentences separately.
-        """
-        # Collect normal_sentences
-        normal_sentences = []
-        for batch in dataloader:
-            normal_sentences.extend(batch["normal_sentences"])  # Extract sources
-
-        # Remove normal_sentences from the dataloader batch to avoid passing them to the model
-        filtered_dataloader = [
-            {k: v for k, v in batch.items() if k not in ["normal_sentences"]} for batch in dataloader
-        ]
-
-        # Run the base evaluation loop
-        outputs = super().evaluation_loop(
-            filtered_dataloader,
-            description,
-            prediction_loss_only=prediction_loss_only,
-            ignore_keys=ignore_keys,
-            metric_key_prefix=metric_key_prefix,
-        )
-
-        # Attach normal_sentences to outputs for metric computation
-        outputs.inputs = normal_sentences
-        return outputs    
-
 def train():
     yaml_config = config_selection()
 
@@ -776,30 +643,34 @@ def train():
         **vars(model_args), **vars(data_args), **vars(training_args)
     )
     print("Parsed arguments:", args)
-    training_args.include_inputs_for_metrics=True
-    # Step 4: Proceed with the rest of the training logic
+    
     checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir)
     if completed_training:
-        print("Detected that training was already completed!")
+        print('Detected that training was already completed!')
 
     model, tokenizer = get_accelerate_model(args, checkpoint_dir)
+
     model.config.use_cache = False
-    print("Loaded model")
+    print('loaded model')
     set_seed(args.seed)
+
     data_module = make_data_module(tokenizer=tokenizer, args=args)
     task = args.task
-
-    trainer = CustomSeq2SeqTrainer(
+    
+    trainer = Seq2SeqTrainer(
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        **{k: v for k, v in data_module.items() if k != "predict_dataset"},
-        compute_metrics=lambda pred: compute_metrics(
-            pred, tokenizer=tokenizer, task=task
+        **{k:v for k,v in data_module.items() if k != 'predict_dataset'},
+        compute_metrics=lambda p: compute_metrics(
+            eval_preds=p.predictions,
+            eval_labels = p.label_ids,
+            tokenizer=tokenizer,
+            task=task  # Dynamically fetched from the config
         ),
     )
     print('Trainer is created!')
-
+    
     # Verifying the datatypes and parameter counts before training.
     print_trainable_parameters(args, model)
     dtypes = {}
@@ -808,18 +679,21 @@ def train():
         if dtype not in dtypes: dtypes[dtype] = 0
         dtypes[dtype] += p.numel()
     total = 0
-    for k, v in dtypes.items(): total += v
+    for k, v in dtypes.items(): total+= v
     for k, v in dtypes.items():
-        print(k, v, v / total)
+        print(k, v, v/total)
 
     all_metrics = {"run_name": args.run_name}
     # Training
     if args.do_train:
+        print('Training...')
         logger.info("*** Train ***")
         logger.info(f"Training dataset size: {len(data_module['train_dataset']) if data_module['train_dataset'] else 0}")
         print(f"Training dataset size: {len(data_module['train_dataset']) if data_module['train_dataset'] else 0}")
         logger.info(f"Evaluation dataset size: {len(data_module['eval_dataset']) if data_module['eval_dataset'] else 0}")
         print(f"Evaluation dataset size: {len(data_module['eval_dataset']) if data_module['eval_dataset'] else 0}")
+        # Note: `resume_from_checkpoint` not supported for adapter checkpoints by HF.
+        # Currently adapter checkpoint is reloaded as expected but optimizer/scheduler states are not.
         train_result = trainer.train()
         metrics = train_result.metrics
         trainer.log_metrics("train", metrics)
@@ -828,60 +702,59 @@ def train():
         all_metrics.update(metrics)
     # Evaluation
     if args.do_eval:
+        print('Evaluating...')
         logger.info("*** Evaluate ***")
-        print('are we in evaluate?')
+        logger.info(f"Evaluation dataset size: {len(data_module['eval_dataset']) if data_module['eval_dataset'] else 0}")
+        print(f"Evaluation dataset size: {len(data_module['eval_dataset']) if data_module['eval_dataset'] else 0}")
         metrics = trainer.evaluate(metric_key_prefix="eval")
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
         all_metrics.update(metrics)
     # Prediction
     if args.do_predict:
+        print('Predicting...')
         logger.info("*** Predict ***")
         if 'labels' not in data_module['predict_dataset'].column_names:
             logger.warning("No 'labels' column found in prediction dataset. Metrics like BLEU may not work.")
-
         logger.info(f"Prediction dataset size: {len(data_module['predict_dataset']) if data_module['predict_dataset'] else 0}")
-        #data_module['predict_dataset'] = data_module['predict_dataset'].select(range(50))
-        prediction_output = trainer.predict(
-            test_dataset=data_module['predict_dataset'], 
-            metric_key_prefix="predict"
-        )
-
+        prediction_output = trainer.predict(test_dataset=data_module['predict_dataset'],metric_key_prefix="predict")
         prediction_metrics = prediction_output.metrics
         predictions = prediction_output.predictions
         predictions = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
-        decoded_predictions = tokenizer.batch_decode(
+        predictions = tokenizer.batch_decode(
             predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
-        for i, prediction in enumerate(predictions[:5]):
-            print(f"Prediction {i}: {prediction}")
+        with open(os.path.join(args.output_dir, 'predictions.jsonl'), 'w') as fout:
+            for i, example in enumerate(data_module['predict_dataset']):
+                example['prediction_with_input'] = predictions[i].strip()
+                example['prediction'] = predictions[i].replace(example['input'], '').strip()
+                fout.write(json.dumps(example) + '\n')
+        print(prediction_metrics)
+        trainer.log_metrics("predict", prediction_metrics)
+        trainer.save_metrics("predict", prediction_metrics)
+        all_metrics.update(prediction_metrics)
 
         # Get references from the dataset
         references = [
             [entry["simple_sentence"]] for entry in data_module["predict_dataset"]["src_info"]
         ]
-
-        # Compute BLEU score
-        bleu_score = compute_bleu_sari(predictions=decoded_predictions, references=references)
-        logger.info(f"BLEU Score: {bleu_score['bleu']}")
+        
         sources = [entry["normal_sentence"] for entry in data_module["predict_dataset"]["src_info"]]
-        sari_score = sari.compute(sources=sources, predictions=decoded_predictions, references=references)
-        logger.info(f"SARI Score: {sari_score['sari']}")
 
-        # Save predictions and BLEU score to a file
-        with open(os.path.join(args.output_dir, 'predictions.jsonl'), 'w') as fout:
-            for i, example in enumerate(data_module['predict_dataset']):
-                example['prediction_with_input'] = decoded_predictions[i].strip()
-                example['prediction'] = decoded_predictions[i].replace(example['input'], '').strip()
-                fout.write(json.dumps(example) + '\n')
-
-        # Add BLEU score to metrics
-        prediction_metrics['bleu'] = bleu_score['bleu']
-        prediction_metrics['sari'] = sari_score['sari']
-
-        trainer.log_metrics("predict", prediction_metrics)
-        trainer.save_metrics("predict", prediction_metrics)
-        all_metrics.update(prediction_metrics)
+        
+        # Compute BLEU, SARI and ROUGE scores
+        sari_score = sari.compute(sources=sources, predictions=predictions, references=references)
+        bleu_score = bleu.compute(predictions, references)
+        rouge_score = rouge.compute(predictions, references)
+        all_metrics.update({"bleu": bleu_score["bleu"], 
+                            'rouge1': rouge_score['rouge1'],
+                            'rouge2': rouge_score['rouge2'],
+                            'rougeL': rouge_score['rougeL'],
+                            'sari': sari_score['sari']
+                            })
+    if (args.do_train or args.do_eval or args.do_predict):
+        with open(os.path.join(args.output_dir, "metrics.json"), "w") as fout:
+            fout.write(json.dumps(all_metrics))
 
 if __name__ == "__main__":
     train()
