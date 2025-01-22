@@ -31,21 +31,22 @@ def process_and_merge_datasets(folder_path, output_path, eval_dataset_size=0.1):
         try:
             with open(file_path, "r") as file:
                 data = json.load(file)
-                
-                # Handle top-level dictionary
-                if isinstance(data, dict):
-                    logger.info(f"Top-level dictionary found in {file_path}. Extracting values...")
-                    data = list(data.values())
+                # Handle specific data format with "src" and "tgt" as lists
+                if not isinstance(data, dict) or "src" not in data or "tgt" not in data:
+                    raise ValueError(f"Invalid format in {file_path}: Expected keys 'src' and 'tgt'.")
 
-                if not isinstance(data, list):
-                    raise ValueError(f"Expected a list of dictionaries in {file_path}, but got {type(data).__name__}")
+                # Convert the lists into a list of dictionaries
+                formatted_data = [
+                    {"src": src, "tgt": tgt, "src_info": src_info}
+                    for src, tgt, src_info in zip(data["src"], data["tgt"], data["src_info"])
+                ]
 
                 if "train" in file_name:
                     logger.info(f"Loading training data from {file_path}...")
-                    train_data.extend(data)
+                    train_data.extend(formatted_data)
                 elif "test" in file_name:
                     logger.info(f"Loading test data from {file_path}...")
-                    test_data.extend(data)
+                    test_data.extend(formatted_data)
         except Exception as e:
             logger.error(f"Failed to load data from {file_path}: {e}")
             raise
@@ -61,7 +62,7 @@ def process_and_merge_datasets(folder_path, output_path, eval_dataset_size=0.1):
         if not isinstance(item, dict) or "src" not in item or "tgt" not in item:
             logger.error(f"Invalid data format in training data at index {idx}: {item}")
             raise ValueError("Training data must be a list of dictionaries with 'src' and 'tgt' keys.")
-        formatted_train_data.append({"input": item["src"], "output": item["tgt"], "index": idx, "src_info": item["src_info"]})
+        formatted_train_data.append({"input": item["src"], "label": item["tgt"], "src_info": item["src_info"], "index": idx})
 
     # Verify and format test data
     formatted_test_data = []
@@ -69,7 +70,7 @@ def process_and_merge_datasets(folder_path, output_path, eval_dataset_size=0.1):
         if not isinstance(item, dict) or "src" not in item or "tgt" not in item:
             logger.error(f"Invalid data format in test data at index {idx}: {item}")
             raise ValueError("Test data must be a list of dictionaries with 'src' and 'tgt' keys.")
-        formatted_test_data.append({"input": item["src"], "output": item["tgt"], "index": idx, 'src_info': item["src_info"]})
+        formatted_test_data.append({"input": item["src"], "label": item["tgt"], "src_info": item["src_info"], "index": idx})
 
     # Create a Hugging Face dataset from the training data
     train_dataset = Dataset.from_list(formatted_train_data)
@@ -97,6 +98,12 @@ def process_and_merge_datasets(folder_path, output_path, eval_dataset_size=0.1):
         "eval": combined_dataset["eval"].to_list(),
         "test": combined_dataset["test"].to_list()
     }
+
+    # Print the number of rows in each split
+    logger.info(f"Training data: {len(merged_data['train'])} rows")
+    logger.info(f"Evaluation data: {len(merged_data['eval'])} rows")
+    logger.info(f"Test data: {len(merged_data['test'])} rows")
+
     with open(output_path, "w") as file:
         json.dump(merged_data, file, indent=4)
 

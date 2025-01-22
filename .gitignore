@@ -4,6 +4,7 @@ venv/
 
 # Ignore data
 data/raw/
+data/preprocessed/
 
 # Ignore logs and outputs
 experiments/logs/
@@ -11,3 +12,7 @@ experiments/logs/
 
 # Ignore Jupyter Notebook checkpoints
 .ipynb_checkpoints/
+
+src/models/
+src/utils/wandb
+src/utils/output

@@ -42,11 +42,11 @@ from nltk.translate.bleu_score import corpus_bleu
 from evaluate import load
 sari = load("sari")
 bleu = load("bleu")
-rouge = load("rouge")
 from rouge_score import rouge_scorer
 from bert_score import score as bert_score
 
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from typing import List, Optional
 
 CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'configs'))
     
@@ -259,60 +259,51 @@ def smart_tokenizer_and_embedding_resize(
         output_embeddings_data[-num_new_tokens:] = output_embeddings_avg
     print(f"Resized tokenizer and embedding to {len(tokenizer)} tokens.")
 
+# new collator with gpt
 #@dataclass
-#class DataCollatorForCausalLM(object):
+#class DataCollatorForCausalLM:
 #    tokenizer: transformers.PreTrainedTokenizer
 #    source_max_len: int
 #    target_max_len: int
 #    train_on_source: bool
 #    predict_with_generate: bool
-#
-#    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-#        # Debugging: Ensure keys are present
-#        assert all('input' in instance and 'labels' in instance for instance in instances), \
-#            "Each instance must have 'input' and 'labels' keys."
-#
-#        # Extract elements
+#    def __call__(self, instances):
+#        # Tokenize inputs and labels
 #        sources = [f"{self.tokenizer.bos_token}{example['input']}" for example in instances]
 #        targets = [f"{example['labels']}{self.tokenizer.eos_token}" for example in instances]
 #
-#        # Tokenize
 #        tokenized_sources = self.tokenizer(
-#            sources,
-#            max_length=self.source_max_len,
-#            truncation=True,
-#            add_special_tokens=False,
+#            sources, max_length=self.source_max_len, truncation=True, add_special_tokens=False
 #        )
 #        tokenized_targets = self.tokenizer(
-#            targets,
-#            max_length=self.target_max_len,
-#            truncation=True,
-#            add_special_tokens=False,
+#            targets, max_length=self.target_max_len, truncation=True, add_special_tokens=False
 #        )
 #
-#        # Build input_ids and labels
-#        input_ids = []
-#        labels = []
-#        for tokenized_source, tokenized_target in zip(
-#            tokenized_sources['input_ids'], tokenized_targets['input_ids']
-#        ):
-#            combined_input = tokenized_source + tokenized_target
-#            if not self.predict_with_generate:
-#                input_ids.append(torch.tensor(combined_input))
-#                labels.append(
-#                        torch.tensor([IGNORE_INDEX] * len(tokenized_source) + tokenized_target)
-#                    )
-#            else:
-#                input_ids.append(torch.tensor(tokenized_source))
+#        input_ids = [torch.tensor(source + target) for source, target in zip(
+#            tokenized_sources["input_ids"], tokenized_targets["input_ids"]
+#        )]
+#        if self.predict_with_generate:
+#            labels = [
+#                torch.tensor(target) for target in tokenized_targets["input_ids"]
+#            ]
+#            
+#        else:
+#            labels = [
+#                torch.tensor([IGNORE_INDEX] * len(source) + target)
+#                for source, target in zip(tokenized_sources["input_ids"], tokenized_targets["input_ids"])
+#            ]
 #
-#        # Apply padding
+#
 #        input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
-#        labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX) if not self.predict_with_generate else None
+#        if not self.predict_with_generate:
+#            labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX)
+#        else:
+#            labels = None
 #
 #        return {
-#            'input_ids': input_ids,
-#            'attention_mask': input_ids.ne(self.tokenizer.pad_token_id),
-#            'labels': labels
+#            "input_ids": input_ids,
+#            "attention_mask": input_ids.ne(self.tokenizer.pad_token_id),
+#            "labels": labels,  # Include labels regardless of predict_with_generate
 #        }
 
 @dataclass
@@ -324,11 +315,16 @@ class DataCollatorForCausalLM(object):
     predict_with_generate: bool
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+        # Debugging: Ensure keys are present
+        assert all('input' in instance and 'labels' in instance for instance in instances), \
+            "Each instance must have 'input' and 'labels' keys."
+
         # Extract elements
         sources = [f"{self.tokenizer.bos_token}{example['input']}" for example in instances]
         targets = [f"{example['labels']}{self.tokenizer.eos_token}" for example in instances]
+
         # Tokenize
-        tokenized_sources_with_prompt = self.tokenizer(
+        tokenized_sources = self.tokenizer(
             sources,
             max_length=self.source_max_len,
             truncation=True,
@@ -340,33 +336,32 @@ class DataCollatorForCausalLM(object):
             truncation=True,
             add_special_tokens=False,
         )
-        # Build the input and labels for causal LM
+
+        # Build input_ids and labels
         input_ids = []
         labels = []
         for tokenized_source, tokenized_target in zip(
-            tokenized_sources_with_prompt['input_ids'],
-            tokenized_targets['input_ids']
+            tokenized_sources['input_ids'], tokenized_targets['input_ids']
         ):
+            combined_input = tokenized_source + tokenized_target
             if not self.predict_with_generate:
-                input_ids.append(torch.tensor(tokenized_source + tokenized_target))
-                if not self.train_on_source:
-                    labels.append(
-                        torch.tensor([IGNORE_INDEX for _ in range(len(tokenized_source))] + copy.deepcopy(tokenized_target))
+                input_ids.append(torch.tensor(combined_input))
+                labels.append(
+                        torch.tensor([IGNORE_INDEX] * len(tokenized_source) + tokenized_target)
                     )
-                else:
-                    labels.append(torch.tensor(copy.deepcopy(tokenized_source + tokenized_target)))
             else:
                 input_ids.append(torch.tensor(tokenized_source))
+
         # Apply padding
         input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
         labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX) if not self.predict_with_generate else None
-        data_dict = {
+
+        return {
             'input_ids': input_ids,
-            'attention_mask':input_ids.ne(self.tokenizer.pad_token_id),
+            'attention_mask': input_ids.ne(self.tokenizer.pad_token_id),
+            'labels': labels
         }
-        if labels is not None:
-            data_dict['labels'] = labels
-        return data_dict
+
 
 def extract_unnatural_instructions_data(examples, extract_reformulations=False):
     out = {
@@ -517,9 +512,9 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             # leave as is
             pass
         # Remove unused columns.
-        dataset = dataset.remove_columns(
-            [col for col in dataset.column_names['train'] if col not in ['input', 'output', 'labels']]
-        )
+        #dataset = dataset.remove_columns(
+        #    [col for col in dataset.column_names['train'] if col not in ['input', 'output']]
+        #)
         return dataset
 
      # Load dataset.
@@ -660,27 +655,27 @@ def compute_bert_score(predictions, references):
     P, R, F1 = bert_score(predictions, references, lang='en', rescale_with_baseline=True)
     return {"bertscore_f1": F1.mean().item()}
 
-def compute_metrics(eval_preds, eval_labels, inputs, tokenizer, task="Simp"):
+def compute_metrics(pred, tokenizer, task="Simp"):
     """
-    Compute metrics using predictions, labels, and aligned normal_sentence.
+    Compute metrics using predictions, labels, and normal_sentences from inputs.
     Args:
-        pred: EvalPrediction containing predictions, labels, and inputs.
+        pred: EvalPrediction object containing predictions, labels, and normal_sentences.
         tokenizer: Tokenizer for decoding.
         task: Task type (e.g., Simp for simplification).
     """
-    # Extract batch predictions, labels, and inputs
-    logits = eval_preds
-    labels = eval_labels
+    logits = pred.predictions
+    labels = pred.label_ids
+    normal_sentences = pred.inputs  # Access normal_sentences here
 
     # Decode predictions
     pred_class = np.argmax(logits, axis=-1)
-    dec_preds = tokenizer.batch_decode(
+    decoded_predictions = tokenizer.batch_decode(
         pred_class, skip_special_tokens=True, clean_up_tokenization_spaces=True
     )
 
     # Decode labels
     labels = np.where(labels == -100, tokenizer.pad_token_id, labels)
-    dec_labels = tokenizer.batch_decode(
+    decoded_labels = tokenizer.batch_decode(
         labels, skip_special_tokens=True, clean_up_tokenization_spaces=True
     )
 
@@ -688,14 +683,17 @@ def compute_metrics(eval_preds, eval_labels, inputs, tokenizer, task="Simp"):
     metrics = {}
     if task == "Simp":
         # Compute BLEU
-        bleu_score = bleu.compute(predictions=dec_preds, references=dec_labels)
-        rouge_score = rouge.compute(predictions=dec_preds, references=dec_labels)
+        bleu_score = bleu.compute(predictions=decoded_predictions, references=decoded_labels)
 
-        return {"bleu": bleu_score["bleu"], "rouge": rouge_score["rouge"]}
-    elif task == "HGen":
-        return compute_rouge(dec_preds, dec_labels)
-    else:
-        return compute_bert_score(dec_preds, dec_labels)
+        # Compute SARI
+        sari_score = sari.compute(
+            sources=normal_sentences, predictions=decoded_predictions, references=[[label] for label in decoded_labels]
+        )
+
+        metrics["bleu"] = bleu_score["bleu"]
+        metrics["sari"] = sari_score["sari"]
+
+    return metrics
 
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
@@ -717,8 +715,40 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         else:
             # Default behavior for non-generation mode
             return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+    
+    def evaluation_loop(
+        self,
+        dataloader,
+        description: str,
+        prediction_loss_only: Optional[bool] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ):
+        """
+        Override evaluation_loop to collect normal_sentences separately.
+        """
+        # Collect normal_sentences
+        normal_sentences = []
+        for batch in dataloader:
+            normal_sentences.extend(batch["normal_sentences"])  # Extract sources
 
+        # Remove normal_sentences from the dataloader batch to avoid passing them to the model
+        filtered_dataloader = [
+            {k: v for k, v in batch.items() if k not in ["normal_sentences"]} for batch in dataloader
+        ]
 
+        # Run the base evaluation loop
+        outputs = super().evaluation_loop(
+            filtered_dataloader,
+            description,
+            prediction_loss_only=prediction_loss_only,
+            ignore_keys=ignore_keys,
+            metric_key_prefix=metric_key_prefix,
+        )
+
+        # Attach normal_sentences to outputs for metric computation
+        outputs.inputs = normal_sentences
+        return outputs    
 
 def train():
     yaml_config = config_selection()
@@ -764,11 +794,8 @@ def train():
         tokenizer=tokenizer,
         args=training_args,
         **{k: v for k, v in data_module.items() if k != "predict_dataset"},
-        compute_metrics=lambda p: compute_metrics(
-            eval_preds=p.predictions,
-            eval_labels = p.label_ids,
-            tokenizer=tokenizer,
-            task=task  # Dynamically fetched from the config
+        compute_metrics=lambda pred: compute_metrics(
+            pred, tokenizer=tokenizer, task=task
         ),
     )
     print('Trainer is created!')
