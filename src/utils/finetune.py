@@ -516,9 +516,9 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             # leave as is
             pass
         # Remove unused columns.
-        dataset = dataset.remove_columns(
-            [col for col in dataset.column_names['train'] if col not in ['input', 'output', 'labels']]
-        )
+        #dataset = dataset.remove_columns(
+        #    [col for col in dataset.column_names['train'] if col not in ['input', 'output', 'labels']]
+        #)
         return dataset
 
      # Load dataset.
@@ -659,7 +659,7 @@ def compute_bert_score(predictions, references):
     P, R, F1 = bert_score(predictions, references, lang='en', rescale_with_baseline=True)
     return {"bertscore_f1": F1.mean().item()}
 
-def compute_metrics(eval_preds, eval_labels, inputs, tokenizer, task="Simp"):
+def compute_metrics(eval_preds, eval_labels, tokenizer, task="Simp"):
     """
     Compute metrics using predictions, labels, and aligned normal_sentence.
     Args:

@@ -8,6 +8,22 @@ import os
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+def replace_lrb_rrb_in_dict(data):
+    """
+    Replaces '-LRB-' with '(' and '-RRB-' with ')' in all string fields of a dictionary.
+    """
+    if isinstance(data, str):
+        # Replace in string
+        return data.replace("-LRB-", "(").replace("-RRB-", ")")
+    elif isinstance(data, dict):
+        # Recursively process dictionary values
+        return {key: replace_lrb_rrb_in_dict(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        # Process lists recursively
+        return [replace_lrb_rrb_in_dict(item) for item in data]
+    else:
+        return data
+
 def process_and_merge_datasets(folder_path, output_path, eval_dataset_size=0.1):
     """
     Processes training and test data from a folder, splits training data into train and eval subsets,
@@ -37,7 +53,11 @@ def process_and_merge_datasets(folder_path, output_path, eval_dataset_size=0.1):
 
                 # Convert the lists into a list of dictionaries
                 formatted_data = [
-                    {"src": src, "tgt": tgt, "src_info": src_info}
+                    {
+                        "src": replace_lrb_rrb_in_dict(src),  # Apply token replacement
+                        "tgt": replace_lrb_rrb_in_dict(tgt),  # Apply token replacement
+                        "src_info": replace_lrb_rrb_in_dict(src_info),
+                    }
                     for src, tgt, src_info in zip(data["src"], data["tgt"], data["src_info"])
                 ]
 
@@ -62,7 +82,7 @@ def process_and_merge_datasets(folder_path, output_path, eval_dataset_size=0.1):
         if not isinstance(item, dict) or "src" not in item or "tgt" not in item:
             logger.error(f"Invalid data format in training data at index {idx}: {item}")
             raise ValueError("Training data must be a list of dictionaries with 'src' and 'tgt' keys.")
-        formatted_train_data.append({"input": item["src"], "label": item["tgt"], "src_info": item["src_info"], "index": idx})
+        formatted_train_data.append({"input": item["src"], "output": item["tgt"], "src_info": item["src_info"], "index": idx})
 
     # Verify and format test data
     formatted_test_data = []
@@ -70,7 +90,7 @@ def process_and_merge_datasets(folder_path, output_path, eval_dataset_size=0.1):
         if not isinstance(item, dict) or "src" not in item or "tgt" not in item:
             logger.error(f"Invalid data format in test data at index {idx}: {item}")
             raise ValueError("Test data must be a list of dictionaries with 'src' and 'tgt' keys.")
-        formatted_test_data.append({"input": item["src"], "label": item["tgt"], "src_info": item["src_info"], "index": idx})
+        formatted_test_data.append({"input": item["src"], "output": item["tgt"], "src_info": item["src_info"], "index": idx})
 
     # Create a Hugging Face dataset from the training data
     train_dataset = Dataset.from_list(formatted_train_data)

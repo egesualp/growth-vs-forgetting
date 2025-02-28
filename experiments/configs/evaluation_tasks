@@ -1,0 +1,29 @@
+accelerate launch --num_processes 2 -m lm_eval --model hf \
+    --model_args pretrained="/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/models/llm_7b_m1_prompt/checkpoint-6189" \
+    --tasks piqa,boolq,winogrande,hellaswag,mathqa,mutual \
+    --batch_size 8 \
+    --trust_remote_code \
+    --output_path "/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/models/llm_7b_m1_prompt/evaluations"
+
+
+accelerate launch --num_processes 2 -m lm_eval --model hf \
+    --model_args pretrained="llm-stacking/StackLLM_7B_300BToken" \
+    --tasks piqa,boolq,winogrande,hellaswag,mathqa,mutual \
+    --batch_size 8 \
+    --trust_remote_code \
+    --output_path "/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/models/stack_7b_m0_prompt/evaluations"
+
+accelerate launch --num_processes 2 -m lm_eval --model hf \
+    --model_args pretrained="/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/llm_7b_m1_prompt/checkpoint-6189" \
+    --tasks mmlu_stem_agg \
+    --batch_size 8 \
+    --trust_remote_code \
+    --output_path "/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/llm_7b_m1_prompt/evaluations" \
+    --num_fewshot 5
+
+
+    lm_eval --model hf \
+  --model_args pretrained=bert-base-uncased \
+  --tasks mmlu_stem_agg,mmlu_social_sciences_agg,mmlu_humanities_agg,mmlu_other_agg \
+  --task_dir ./custom_tasks \
+  --output_path ./eval_results.json

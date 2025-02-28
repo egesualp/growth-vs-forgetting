@@ -1,0 +1,34 @@
+model_name_or_path: "llm-stacking/StackLLM_3B_300BToken"  # Model name or path
+dataset: "../../data/preprocessed/simp_wiki_auto.json"
+dataset_format: "input-output"                              # Dataset format
+output_dir: "../models/stack_3b_m0/test"
+task: 'Simp'
+predict_with_generate: true
+
+num_beams: 5
+temperature: 1.0
+top_k: 50
+top_p: 0.9
+length_penalty: 0.8
+remove_unused_columns: False
+generation_max_length: 256                                 # Reduce max generation length to save memory
+do_train: false
+do_eval: false
+do_predict: true
+
+# Performance optimizations
+per_device_eval_batch_size: 2                              # Reduce batch size to lower memory usage
+fp16: true                                                 # Use mixed precision (requires compatible GPU)
+gradient_checkpointing: true                               # Save memory by not storing intermediate gradients
+use_cpu: false                                             # Ensure GPU usage unless explicitly required
+max_length: 256                                            # Reduce sequence length if applicable
+logging_steps: 10
+save_strategy: "steps"
+evaluation_strategy: "steps"
+eval_steps: 50
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 16
+gradient_accumulation_steps: 4
+eval_accumulation_steps: 8
+dataloader_num_workers: 8
+train_on_source: false

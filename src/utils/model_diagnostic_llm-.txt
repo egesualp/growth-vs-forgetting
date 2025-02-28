@@ -1,0 +1,113 @@
+
+🚀 Checking model: llm-stacking/StackLLM_3B_300BToken
+🧠 Total Parameters: 2,397,473,280
+🔄 Trainable Parameters: 2,397,473,280
+❄️ Frozen Parameters: 0
+✅ No Frozen Layers (Full Fine-Tuning)
+🔄 Unique Weights: 291 / 291
+
+🔍 Model Architecture Overview:
+LlamaForCausalLM(
+  (model): LlamaModel(
+    (embed_tokens): Embedding(32000, 2560, padding_idx=0)
+    (layers): ModuleList(
+      (0-31): 32 x LlamaDecoderLayer(
+        (self_attn): LlamaAttention(
+          (q_proj): Linear(in_features=2560, out_features=2560, bias=False)
+          (k_proj): Linear(in_features=2560, out_features=512, bias=False)
+          (v_proj): Linear(in_features=2560, out_features=512, bias=False)
+          (o_proj): Linear(in_features=2560, out_features=2560, bias=False)
+          (rotary_emb): LlamaRotaryEmbedding()
+        )
+        (mlp): LlamaMLP(
+          (gate_proj): Linear(in_features=2560, out_features=7040, bias=False)
+          (up_proj): Linear(in_features=2560, out_features=7040, bias=False)
+          (down_proj): Linear(in_features=7040, out_features=2560, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): LlamaRMSNorm()
+        (post_attention_layernorm): LlamaRMSNorm()
+      )
+    )
+    (norm): LlamaRMSNorm()
+
+
+✅ Diagnostics Complete!
+
+================================================================================
+
+🚀 Checking model: llm-stacking/StackLLM_3B_300BToken
+🧠 Total Parameters: 2,397,473,280
+🔄 Trainable Parameters: 2,397,473,280
+❄️ Frozen Parameters: 0
+✅ No Frozen Layers (Full Fine-Tuning)
+🔄 Unique Weights: 291 / 291
+
+🔍 Model Architecture Overview:
+LlamaForCausalLM(
+  (model): LlamaModel(
+    (embed_tokens): Embedding(32000, 2560, padding_idx=0)
+    (layers): ModuleList(
+      (0-31): 32 x LlamaDecoderLayer(
+        (self_attn): LlamaAttention(
+          (q_proj): Linear(in_features=2560, out_features=2560, bias=False)
+          (k_proj): Linear(in_features=2560, out_features=512, bias=False)
+          (v_proj): Linear(in_features=2560, out_features=512, bias=False)
+          (o_proj): Linear(in_features=2560, out_features=2560, bias=False)
+          (rotary_emb): LlamaRotaryEmbedding()
+        )
+        (mlp): LlamaMLP(
+          (gate_proj): Linear(in_features=2560, out_features=7040, bias=False)
+          (up_proj): Linear(in_features=2560, out_features=7040, bias=False)
+          (down_proj): Linear(in_features=7040, out_features=2560, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): LlamaRMSNorm()
+        (post_attention_layernorm): LlamaRMSNorm()
+      )
+    )
+    (norm): LlamaRMSNorm()
+
+
+✅ Diagnostics Complete!
+
+================================================================================
+
+🚀 Checking model: llm-stacking/StackLLM_3B_300BToken
+🧠 Total Parameters: 2,397,473,280
+🔄 Trainable Parameters: 2,397,473,280
+❄️ Frozen Parameters: 0
+✅ No Frozen Layers (Full Fine-Tuning)
+🔄 Unique Weights: 291 / 291
+
+🔍 Model Architecture Overview:
+LlamaForCausalLM(
+  (model): LlamaModel(
+    (embed_tokens): Embedding(32000, 2560, padding_idx=0)
+    (layers): ModuleList(
+      (0-31): 32 x LlamaDecoderLayer(
+        (self_attn): LlamaAttention(
+          (q_proj): Linear(in_features=2560, out_features=2560, bias=False)
+          (k_proj): Linear(in_features=2560, out_features=512, bias=False)
+          (v_proj): Linear(in_features=2560, out_features=512, bias=False)
+          (o_proj): Linear(in_features=2560, out_features=2560, bias=False)
+          (rotary_emb): LlamaRotaryEmbedding()
+        )
+        (mlp): LlamaMLP(
+          (gate_proj): Linear(in_features=2560, out_features=7040, bias=False)
+          (up_proj): Linear(in_features=2560, out_features=7040, bias=False)
+          (down_proj): Linear(in_features=7040, out_features=2560, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): LlamaRMSNorm()
+        (post_attention_layernorm): LlamaRMSNorm()
+      )
+    )
+    (norm): LlamaRMSNorm()
+
+
+ PS: # of Layers: None
+
+✅ Diagnostics Complete!
+
+================================================================================

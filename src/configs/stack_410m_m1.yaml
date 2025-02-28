@@ -1,0 +1,35 @@
+model_name_or_path: "llm-stacking/StackLLM_410M_750BToken"  # Model name or path
+dataset: "../../data/preprocessed/simp_wiki_auto_new.json"
+dataset_format: "input-output"                              # Dataset format
+output_dir: "../models/stack_410m_m1" 
+checkpoint_dir: "../models/stack_410m_m1"
+trust_remote_code: true
+max_length: 512
+max_eval_samples: 256
+overwrite_output_dir: true
+do_train: true
+do_eval: false
+do_predict: false
+evaluation_strategy: "steps"
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 16
+gradient_accumulation_steps: 4
+eval_accumulation_steps: 8
+dataloader_num_workers: 8
+learning_rate: 2e-5
+weight_decay: 0.0
+num_train_epochs: 3
+max_steps: -1
+lr_scheduler_type: "constant"
+logging_steps: 50
+save_strategy: "steps"
+save_steps: 500
+eval_steps: 250
+save_total_limit: 3
+seed: 42
+report_to: wandb                                    # Reporting integrations (e.g., wandb)
+fp16: true
+dataloader_pin_memory: true
+task: 'Simp'
+predict_with_generate: false 
+train_on_source: false
