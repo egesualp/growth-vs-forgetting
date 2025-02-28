@@ -55,6 +55,10 @@ logger = logging.getLogger(__name__)
 IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "[PAD]"
 
+#bnb_config = BitsAndBytesConfig(
+#    load_in_8bit = True,
+#)
+
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(
@@ -187,6 +191,7 @@ def get_accelerate_model(args, checkpoint_dir):
         args.model_name_or_path,
         device_map=device_map,
         trust_remote_code=args.trust_remote_code,
+        #quantization_config=bnb_config,  # Apply quantization
     )
 
     # Tokenizer
@@ -196,6 +201,7 @@ def get_accelerate_model(args, checkpoint_dir):
         use_fast=True, # Fast tokenizer giving issues.
         trust_remote_code=args.trust_remote_code,
     )
+    
     if tokenizer._pad_token is None:
         special_tokens_dict = dict(pad_token=DEFAULT_PAD_TOKEN)
         if args.dataset == "OpenAssistant/oasst_top1_2023-08-25":
@@ -264,7 +270,7 @@ class DataCollatorForCausalLM(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         # Extract elements
         sources = [f"{self.tokenizer.bos_token}{example['input']}" for example in instances]
-        targets = [f"{example['label']}{self.tokenizer.eos_token}" for example in instances]
+        targets = [f"{example['output']}{self.tokenizer.eos_token}" for example in instances]
         # Tokenize
         tokenized_sources_with_prompt = self.tokenizer(
             sources,
@@ -353,7 +359,7 @@ def local_dataset(dataset_name, args):
             eval_dataset = Dataset.from_json(path_or_paths=dataset_name, field='eval')
             full_dataset['eval'] = eval_dataset
         if args.do_predict:
-            test_dataset = Dataset.from_json(path_or_paths=dataset_name, field='test')
+            test_dataset = Dataset.from_json(path_or_paths=dataset_name, field='train')
             full_dataset['test'] = test_dataset
     elif dataset_name.endswith('.csv'):
         full_dataset = Dataset.from_pandas(pd.read_csv(dataset_name))
@@ -396,6 +402,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         f"<<SYS>>\n{SYSTEM_PROMPT}\n<</SYS>>\n\n"
         f"[INST]\n{example['input']}\n[/INST]\n"
             )
+        #example['label'] = example['output']
         return example
     
     def load_data(dataset_name):
@@ -419,7 +426,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             if os.path.exists(dataset_name):
                 try:
                     args.dataset_format = args.dataset_format if args.dataset_format else "input-output"
-                    full_dataset = local_dataset(dataset_name)
+                    full_dataset = local_dataset(dataset_name, args)
                     return full_dataset
                 except:
                     raise ValueError(f"Error loading dataset from {dataset_name}")
@@ -453,10 +460,18 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         elif dataset_format == 'input-output':
             # leave as is
             pass
-        # Remove unused columns.
-        dataset = dataset.remove_columns(
-            [col for col in dataset.column_names['train'] if col not in ['input', 'output', 'labels']]
-        )
+        # Check if dataset is a DatasetDict (dict-like object with splits)
+        if isinstance(dataset, dict):  # DatasetDict or similar
+            for split in dataset.keys():
+                if split != 'test':
+                    dataset[split] = dataset[split].remove_columns(
+                        [col for col in dataset[split].column_names if col not in ['input', 'output', 'labels']]
+                    )
+        else:  # Single Dataset
+            dataset = dataset.remove_columns(
+                [col for col in dataset.column_names if col not in ['input', 'output', 'labels']]
+            )
+
         return dataset
 
      # Load dataset.
@@ -472,6 +487,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         if 'eval' in dataset:
             eval_dataset = dataset['eval']
             eval_dataset = eval_dataset.map(preprocess_custom_data)
+            print(eval_dataset.column_names)
         else:
             print('Splitting train dataset in train and validation according to `eval_dataset_size`')
             dataset = dataset["train"].train_test_split(
@@ -518,26 +534,22 @@ def get_last_checkpoint(checkpoint_dir):
         return checkpoint_dir, is_completed # checkpoint found!
     return None, False # first training
 
-def config_selection():
-    # Step 1: Select a configuration file
+def config_selection(config_name=None):
     config_dir = CONFIG_DIR
-    print(config_dir)
     configs = [f for f in os.listdir(config_dir) if f.endswith(".yaml")]
+
     if not configs:
         raise FileNotFoundError(f"No YAML configuration files found in {config_dir}")
 
-    print("Available configuration files:")
-    for idx, config in enumerate(configs):
-        print(f"{idx}: {config}")
-    
-    selected_idx = int(input("Select a configuration file by index: "))
-    if selected_idx < 0 or selected_idx >= len(configs):
-        raise ValueError("Invalid configuration index selected.")
-    
-    config_path = os.path.join(config_dir, configs[selected_idx])
+    if config_name is None:
+        raise ValueError("No config_name provided. Pass it as an argument.")
+
+    config_path = os.path.join(config_dir, config_name)
+    if config_name not in configs:
+        raise ValueError(f"Configuration file {config_name} not found in {config_dir}")
+
     print(f"Using configuration: {config_path}")
 
-    # Step 2: Load configuration
     with open(config_path, "r") as file:
         yaml_config = yaml.safe_load(file)
 
@@ -568,7 +580,7 @@ def compute_bert_score(predictions, references):
     P, R, F1 = bert_score(predictions, references, lang='en', rescale_with_baseline=True)
     return {"bertscore_f1": F1.mean().item()}
 
-def compute_metrics(eval_preds, eval_labels, inputs, tokenizer, task="Simp"):
+def compute_metrics(eval_preds, eval_labels, tokenizer, task="Simp"):
     """
     Compute metrics using predictions, labels, and aligned normal_sentence.
     Args:
@@ -591,13 +603,6 @@ def compute_metrics(eval_preds, eval_labels, inputs, tokenizer, task="Simp"):
     dec_labels = tokenizer.batch_decode(
         labels, skip_special_tokens=True, clean_up_tokenization_spaces=True
     )
-    
-    # Perplexity calculation
-    log_probs = -np.log(np.exp(logits) / np.sum(np.exp(logits), axis=-1, keepdims=True))
-    token_loss = np.sum(log_probs * (labels != tokenizer.pad_token_id), axis=-1)
-    total_loss = np.sum(token_loss)  # Total loss
-    num_tokens = np.sum(labels != tokenizer.pad_token_id)  # Non-padding tokens
-    perplexity = np.exp(total_loss / num_tokens) if num_tokens > 0 else float("inf")
 
     # Compute metrics
     metrics = {}
@@ -610,19 +615,43 @@ def compute_metrics(eval_preds, eval_labels, inputs, tokenizer, task="Simp"):
                 'rouge1': rouge_score['rouge1'],
                 'rouge2': rouge_score['rouge2'],
                 'rougeL': rouge_score['rougeL'], 
-                "perplexity": perplexity
                 }
     elif task == "HGen":
         return compute_rouge(dec_preds, dec_labels)
     else:
         return compute_bert_score(dec_preds, dec_labels)
     
+class CustomSeq2SeqTrainer(Seq2SeqTrainer):
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        if self.args.predict_with_generate:
+            # Perform generation with all relevant parameters
+            generated_tokens = model.generate(
+                inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                max_length=getattr(self.args, "generation_max_length", 256),
+                num_beams=getattr(self.args, "num_beams", 1),
+                temperature=getattr(self.args, "temperature", 1.0),
+                top_k=getattr(self.args, "top_k", 50),
+                top_p=getattr(self.args, "top_p", 0.9),
+                length_penalty=getattr(self.args, "length_penalty", 1.0),  # Add length_penalty
+                eos_token_id=self.tokenizer.eos_token_id,
+            )
+            labels = inputs.get("labels")
+            return None, generated_tokens, labels
+        else:
+            # Default behavior for non-generation mode
+            return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+        
 def train():
-    yaml_config = config_selection()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, required=True, help="Name of the YAML config file.")
+    args = parser.parse_args()
+
+    yaml_config = config_selection(config_name=args.config)
 
     print(f'Is CUDA available: {torch.cuda.is_available()}')
 
-    # Step 3: Parse arguments
+    # Step 3: Parse arguments from config
     hfparser = transformers.HfArgumentParser((
         ModelArguments, DataArguments, TrainingArguments, GenerationArguments
     ))
@@ -701,15 +730,16 @@ def train():
         trainer.save_state()
         all_metrics.update(metrics)
     # Evaluation
-    if args.do_eval:
-        print('Evaluating...')
-        logger.info("*** Evaluate ***")
-        logger.info(f"Evaluation dataset size: {len(data_module['eval_dataset']) if data_module['eval_dataset'] else 0}")
-        print(f"Evaluation dataset size: {len(data_module['eval_dataset']) if data_module['eval_dataset'] else 0}")
-        metrics = trainer.evaluate(metric_key_prefix="eval")
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-        all_metrics.update(metrics)
+    #if args.do_eval:
+    #    print('Evaluating...')
+    #    logger.info("*** Evaluate ***")
+    #    logger.info(f"Evaluation dataset size: {len(data_module['eval_dataset']) if data_module['eval_dataset'] else 0}")
+    #    print(f"Evaluation dataset size: {len(data_module['eval_dataset']) if data_module['eval_dataset'] else 0}")
+    #    trainer.args.predict_with_generate = True  # Enable predict_with_generate
+    #    metrics = trainer.evaluate(metric_key_prefix="eval")
+    #    trainer.log_metrics("eval", metrics)
+    #    trainer.save_metrics("eval", metrics)
+    #    all_metrics.update(metrics)
     # Prediction
     if args.do_predict:
         print('Predicting...')
@@ -724,15 +754,11 @@ def train():
         predictions = tokenizer.batch_decode(
             predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
-        with open(os.path.join(args.output_dir, 'predictions.jsonl'), 'w') as fout:
-            for i, example in enumerate(data_module['predict_dataset']):
-                example['prediction_with_input'] = predictions[i].strip()
-                example['prediction'] = predictions[i].replace(example['input'], '').strip()
-                fout.write(json.dumps(example) + '\n')
-        print(prediction_metrics)
-        trainer.log_metrics("predict", prediction_metrics)
-        trainer.save_metrics("predict", prediction_metrics)
-        all_metrics.update(prediction_metrics)
+       # Strip predictions here
+        stripped_predictions = [
+            predictions[i].replace(data_module['predict_dataset'][i]['input'], '').strip()
+            for i in range(len(predictions))
+        ]
 
         # Get references from the dataset
         references = [
@@ -743,15 +769,31 @@ def train():
 
         
         # Compute BLEU, SARI and ROUGE scores
-        sari_score = sari.compute(sources=sources, predictions=predictions, references=references)
-        bleu_score = bleu.compute(predictions, references)
-        rouge_score = rouge.compute(predictions, references)
+        sari_score = sari.compute(sources=sources, predictions=stripped_predictions, references=references)
+        bleu_score = bleu.compute(predictions=stripped_predictions, references=references)
+        rouge_score = rouge.compute(predictions=stripped_predictions, references=references)
         all_metrics.update({"bleu": bleu_score["bleu"], 
                             'rouge1': rouge_score['rouge1'],
                             'rouge2': rouge_score['rouge2'],
                             'rougeL': rouge_score['rougeL'],
                             'sari': sari_score['sari']
                             })
+        all_metrics.update(prediction_metrics)
+        print(all_metrics)
+        trainer.log_metrics("predict", all_metrics)
+        trainer.save_metrics("predict", all_metrics)
+        
+        with open(os.path.join(args.output_dir, 'predictions.jsonl'), 'w') as fout:
+            for i, example in enumerate(data_module['predict_dataset']):
+                example['prediction_with_input'] = predictions[i].strip()
+                example['prediction'] = predictions[i].replace(example['input'], '').strip()
+                fout.write(json.dumps(example) + '\n')
+        print(prediction_metrics)
+        #trainer.log_metrics("predict", prediction_metrics)
+        #trainer.save_metrics("predict", prediction_metrics)
+        #all_metrics.update(prediction_metrics)
+
+        
     if (args.do_train or args.do_eval or args.do_predict):
         with open(os.path.join(args.output_dir, "metrics.json"), "w") as fout:
             fout.write(json.dumps(all_metrics))

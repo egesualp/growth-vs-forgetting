@@ -1,0 +1,80 @@
+def create_ds_config(training_args):
+    ds_config = {
+        "zero_optimization": {
+            "stage": 2,  
+            "offload_optimizer": {
+                "device": "cpu",
+                "pin_memory": True
+            },
+            "offload_param": {
+                "device": "cpu",
+                "pin_memory": True
+            },
+            "overlap_comm": True,  
+            "contiguous_gradients": True,  
+            "reduce_bucket_size": "auto"
+        },
+        "train_micro_batch_size_per_gpu": "auto",
+        "train_batch_size": "auto",
+        "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
+        "zero_allow_untested_optimizer": True,
+        "gradient_clipping": "auto",
+        "fp16": {
+            "enabled": training_args.fp16
+        },
+        "wall_clock_breakdown": False,
+        "distributed_world_size": training_args.world_size
+    }
+    
+    return ds_config
+
+
+def create_ds_config(training_args):
+    ds_config = {
+        "zero_optimization": {
+        "stage": 3,
+        "offload_optimizer": {
+            "device": "cpu",
+            "pin_memory": True
+        },
+        "offload_param": {
+            "device": "cpu",
+            "pin_memory": True
+        },
+        "overlap_comm": True,
+        "contiguous_gradients": True,
+        "sub_group_size": 1e9,
+        "reduce_bucket_size": "auto",
+        "stage3_prefetch_bucket_size": "auto",
+        "stage3_param_persistence_threshold": "auto",
+        "stage3_max_live_parameters": 1e9,
+        "stage3_max_reuse_distance": 1e9,
+        "stage3_gather_16bit_weights_on_model_save": True
+        },
+        "train_micro_batch_size_per_gpu": "auto",
+        "train_batch_size": "auto",
+        "gradient_accumulation_steps": "auto",
+        "zero_allow_untested_optimizer": True,
+        "gradient_clipping": "auto",
+        "fp16": {
+            "enabled": training_args.fp16
+        },
+        #"bf16": {
+        #    "enabled": training_args.bf16
+        #},
+        "wall_clock_breakdown": False,
+        "distributed_world_size": training_args.world_size,
+        "activation_checkpointing": {
+            "partition_activations": True,
+            "contiguous_memory_optimization": True,
+            "cpu_checkpointing": False
+        }
+    }
+
+    # Save the generated config
+    with open("ds_config.json", "w") as f:
+        json.dump(ds_config, f, indent=4)
+    
+    print(f"Generated ds_config.json: {json.dumps(ds_config, indent=4)}")
+
+    return "ds_config.json"

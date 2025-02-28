@@ -1,0 +1,32 @@
+{
+    "zero_optimization": {
+        "stage": 2,
+        "offload_optimizer": {
+            "device": "cpu"
+        },
+        "offload_param": {
+            "device": "none"
+        },
+        "overlap_comm": true,
+        "contiguous_gradients": true,
+        "sub_group_size": 1e9,
+        "reduce_bucket_size": "auto"
+    },
+    "train_micro_batch_size_per_gpu": 8,
+    "train_batch_size": 96,
+    "gradient_accumulation_steps": 4,
+    "zero_allow_untested_optimizer": true,
+    "gradient_clipping": "auto",
+    "fp16": {
+        "enabled": true
+    },
+    "allgather_bucket_size": 5e8,
+    "reduce_scatter": true,
+    "wall_clock_breakdown": false,
+    "distributed_world_size": 2,
+    "activation_checkpointing": {
+        "partition_activations": true,
+        "contiguous_memory_optimization": true,
+        "cpu_checkpointing": false
+    }
+}

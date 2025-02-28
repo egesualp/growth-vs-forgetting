@@ -9,6 +9,8 @@ data/preprocessed/
 # Ignore logs and outputs
 experiments/logs/
 *.log
+*.err
+*.out
 
 # Ignore Jupyter Notebook checkpoints
 .ipynb_checkpoints/

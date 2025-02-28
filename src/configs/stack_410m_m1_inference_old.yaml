@@ -1,0 +1,38 @@
+model_name_or_path: "../models/GStack_410M_T750B_wiki_auto/checkpoint-4000"
+dataset: "../../data/preprocessed/simp_wiki_auto_new.json"
+dataset_format: "input-output"
+output_dir: "../models/stack_410m_m0/test"
+task: 'Simp'
+predict_with_generate: true
+
+# Generation parameters
+num_beams: 5                   # Keeps beam search for high-quality generation
+temperature: 0.7               # Lower temperature for more deterministic outputs
+top_k: 50                      # Retain for diversity control
+top_p: 0.9                     # Retain for nucleus sampling
+length_penalty: 0.8            # Penalizes overly long outputs
+generation_max_length: 256     # Reduced to save memory if shorter generations suffice
+remove_unused_columns: False
+# Execution controls
+do_train: false
+do_eval: true
+do_predict: true
+
+# Performance optimizations
+fp16: true                      # Use mixed precision for GPU memory optimization
+gradient_checkpointing: false   # Not needed for inference (saves CPU overhead)
+use_cpu: false                  # Ensure GPU usage unless no GPU is available
+logging_steps: 50               # Increase to reduce logging overhead
+save_strategy: "no"             # No saving required for inference
+evaluation_strategy: "no"       # No evaluation steps during prediction
+train_on_source: false
+
+# Batch sizes and memory usage
+per_device_train_batch_size: 8  # Reduce train batch size (though training is off)
+per_device_eval_batch_size: 4   # Reduce eval batch size for memory optimization
+gradient_accumulation_steps: 1  # Not relevant as training is disabled
+eval_accumulation_steps: 4      # Reduce memory spikes during prediction
+dataloader_num_workers: 4       # Reduced to avoid CPU overload
+
+# Model limits
+max_length: 256                 # Align with generation_max_length for consistency
