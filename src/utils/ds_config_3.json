@@ -22,7 +22,7 @@
     "bf16": {
         "enabled": true
     },
-    "train_batch_size": 32,
+    "train_batch_size": 48,
     "train_micro_batch_size_per_gpu": 8,
     "gradient_accumulation_steps": 1,
     "wall_clock_breakdown": false
