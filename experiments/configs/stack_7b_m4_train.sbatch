@@ -1,12 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=ft_stack_7b_m3_p        # Name of the job
+#SBATCH --job-name=ft_stack_7b_m4_p        # Name of the job
 #SBATCH --qos=mcml
-#SBATCH --output=experiments/logs/ft_stack_7b_m3_p_%j.log    # Log output (%j expands to job ID)
-#SBATCH --error=experiments/logs/ft_stack_7b_m3_p_%j.err     # Error output
+#SBATCH --output=experiments/logs/ft_stack_7b_m4_p_%j.log    # Log output (%j expands to job ID)
+#SBATCH --error=experiments/logs/ft_stack_7b_m4_p_%j.err     # Error output
 #SBATCH --partition=mcml-dgx-a100-40x8  # Specify the partition to use
 #SBATCH --gres=gpu:8                     # Number of GPUs to use
 #SBATCH --ntasks=1                       # Number of tasks
 #SBATCH --time=06:00:00                   # Time limit
+#SBATCH --begin=2025-03-03T06:00:00
 
 # Activate conda environment
 source /dss/dsshome1/02/ra95kix2/miniconda3/bin/activate clean
@@ -29,12 +30,11 @@ export HF_DATASETS_CACHE="/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/.cach
 nvidia-smi
 
 deepspeed --num_gpus=8 finetune_v3.py \
-    --model_name_or_path "/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/stack_7b_m2_prompt/checkpoint-3546" \
-    --dataset "../../data/preprocessed/inqQG.json" \
+    --model_name_or_path "/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/stack_7b_m3_prompt_2/checkpoint-1173" \
+    --dataset "../../data/preprocessed/exp.json" \
     --dataset_format "prompt" \
-	--output_dir "/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/models/stack_7b_m3_prompt_2" \
-	--run_name "stack_7b_m3_prompt_exp3" \
-    --max_train_samples 100000 \
+	--output_dir "/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/models/stack_7b_m4_prompt" \
+	--run_name "stack_7b_m4_prompt" \
     --num_train_epochs 3 \
 	--per_device_train_batch_size 16 \
 	--gradient_accumulation_steps 2 \

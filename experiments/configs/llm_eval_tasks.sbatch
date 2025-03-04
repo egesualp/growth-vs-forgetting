@@ -6,7 +6,7 @@
 #SBATCH --partition=mcml-dgx-a100-40x8  # Specify the partition to use
 #SBATCH --gres=gpu:2                     # Number of GPUs to use
 #SBATCH --ntasks=1                       # Number of tasks
-#SBATCH --time=02:00:00                   # Time limit
+#SBATCH --time=01:00:00                   # Time limit
 
 #!/bin/bash
 
@@ -34,9 +34,7 @@ nvidia-smi
 # Declare associative arrays for models and tasks
 declare -A MODELS
 MODELS=(
-    ["llm_7b_m2"]="/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/llm_7b_m2_prompt/checkpoint-3546"
-    ["llm_7b_m1"]="/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/llm_7b_m1_prompt/checkpoint-6189"
-    ["llm_7b_m0"]="llm-stacking/LLM_7B_300BToken"
+    ["llm_7b_m3"]="/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/models/llm_7b_m3_prompt/checkpoint-1173"
 )
 
 declare -A TASKS

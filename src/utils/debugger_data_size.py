@@ -5,9 +5,9 @@ def clean_text(text):
     return text.replace('-RRB-', ')').replace('-LRB-', '(').replace('-RSB-', ']').replace('-LSB-', '[')
 
 # Define file path
-file_path = "/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/data/preprocessed/inqQG.json"
+file_path = "/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/data/preprocessed/simp_wiki_auto_new.json"
 print(f'File path: {file_path}')
-train_dataset = Dataset.from_json(path_or_paths=file_path, field='train')
+train_dataset = Dataset.from_json(path_or_paths=file_path, field='test')
 dataset = train_dataset
 dataset = dataset.map(lambda x: {
                     'input': f"Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n{clean_text(x['input'])}\n\n### Response:",

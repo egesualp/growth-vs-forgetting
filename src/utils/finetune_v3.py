@@ -855,7 +855,7 @@ def train():
             ]
         elif task.lower() == 'inqqg':
             references = [
-                [entry["questions"] for entry in data_module["predict_dataset"]["src_info"]]
+                [entry["question"] for entry in data_module["predict_dataset"]["src_info"]]
             ]
 
         if args.compute_bleu:

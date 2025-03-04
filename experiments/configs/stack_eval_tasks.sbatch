@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=eval_stack_7b        # Name of the job
+#SBATCH --job-name=eval_stack_7b_rc_only        # Name of the job
 #SBATCH --qos=mcml
-#SBATCH --output=experiments/logs/eval_stack_7b_%j.log    # Log output (%j expands to job ID)
-#SBATCH --error=experiments/logs/eval_stack_7b_%j.err     # Error output
+#SBATCH --output=experiments/logs/eval_stack_7b_rc_only%j.log    # Log output (%j expands to job ID)
+#SBATCH --error=experiments/logs/eval_stack_7b_rc_only_%j.err     # Error output
 #SBATCH --partition=mcml-dgx-a100-40x8  # Specify the partition to use
 #SBATCH --gres=gpu:2                     # Number of GPUs to use
 #SBATCH --ntasks=1                       # Number of tasks
-#SBATCH --time=02:00:00                   # Time limit
+#SBATCH --time=00:20:00                   # Time limit
 
 #!/bin/bash
 
@@ -34,17 +34,17 @@ nvidia-smi
 # Declare associative arrays for models and tasks
 declare -A MODELS
 MODELS=(
-    #["stack_7b_m2"]="/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/stack_7b_m2_prompt/checkpoint-3546"
+    ["stack_7b_m3"]="/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/llm_7b_m2_prompt/checkpoint-3546"
     #["stack_7b_m1"]="/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/stack_7b_m1_prompt/checkpoint-6189"
-    ["stack_7b_m0"]="llm-stacking/StackLLM_7B_300BToken"
+    #["stack_7b_m0"]="llm-stacking/StackLLM_7B_300BToken"
 )
 
 declare -A TASKS
 TASKS=(
-    ["Rs"]="piqa,boolq,winogrande,hellaswag,mathqa,mutual"
+    #["Rs"]="piqa,boolq,winogrande,hellaswag,mathqa,mutual"
     ["RC"]="race"
-    ["DK"]="mmlu_stem,mmlu_humanities,mmlu_social_sciences,mmlu_other"
-    ["Bias"]="crows_pairs"
+    #["DK"]="mmlu_stem,mmlu_humanities,mmlu_social_sciences,mmlu_other"
+    #["Bias"]="crows_pairs"
 )
 
 # Output CSV
