@@ -34,7 +34,7 @@ nvidia-smi
 # Declare associative arrays for models and tasks
 declare -A MODELS
 MODELS=(
-    ["stack_7b_m3"]="/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/llm_7b_m2_prompt/checkpoint-3546"
+    ["stack_7b_m3"]="/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/stack_7b_m2_prompt/checkpoint-3546"
     #["stack_7b_m1"]="/dss/dsshome1/02/ra95kix2/seminar_fma/growth-vs-forgetting/src/models/stack_7b_m1_prompt/checkpoint-6189"
     #["stack_7b_m0"]="llm-stacking/StackLLM_7B_300BToken"
 )
