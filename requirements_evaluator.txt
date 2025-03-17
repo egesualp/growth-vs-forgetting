@@ -1,5 +1,5 @@
 absl-py==2.1.0
-accelerate==0.21.0
+accelerate==1.4.0
 aiohappyeyeballs==2.4.4
 aiohttp==3.11.11
 aiosignal==1.3.2
@@ -9,12 +9,15 @@ attrs==24.3.0
 bert-score==0.3.13
 bitsandbytes==0.45.1
 Brotli @ file:///croot/brotli-split_1736182456865/work
-certifi==2025.1.31
+certifi @ file:///home/conda/feedstock_root/build_artifacts/certifi_1739515848642/work/certifi
+cffi @ file:///home/conda/feedstock_root/build_artifacts/cffi_1725560564262/work
+chardet==5.2.0
 charset-normalizer==3.4.1
 click==8.1.8
 colorama==0.4.6
 contourpy==1.3.1
 cycler==0.12.1
+DataProperty==1.1.0
 datasets==3.2.0
 deepspeed==0.15.4
 dill==0.3.8
@@ -29,22 +32,29 @@ fsspec==2024.9.0
 gitdb==4.0.12
 GitPython==3.1.44
 gmpy2 @ file:///croot/gmpy2_1738085463648/work
+h2 @ file:///home/conda/feedstock_root/build_artifacts/h2_1738578511449/work
 hjson==3.1.0
+hpack @ file:///home/conda/feedstock_root/build_artifacts/hpack_1737618293087/work
 huggingface-hub==0.27.1
+hyperframe @ file:///home/conda/feedstock_root/build_artifacts/hyperframe_1737618333194/work
 idna @ file:///croot/idna_1714398848350/work
 importlib_resources==6.5.2
 Jinja2 @ file:///croot/jinja2_1737760107953/work
 joblib==1.4.2
+jsonlines==4.0.0
 kiwisolver==1.4.8
 lightning-utilities==0.12.0
+-e git+https://github.com/EleutherAI/lm-evaluation-harness@370e2f9e5bbe59912644b1b6e052e17be31d6858#egg=lm_eval
 lxml==5.3.0
 markdown-it-py==3.0.0
 MarkupSafe @ file:///croot/markupsafe_1736366905094/work
 matplotlib==3.10.0
+mbstrdecoder==1.1.4
 mdurl==0.1.2
 mkl-service==2.4.0
 mkl_fft @ file:///io/mkl313/mkl_fft_1730824109137/work
 mkl_random @ file:///io/mkl313/mkl_random_1730823916628/work
+more-itertools==10.6.0
 mpmath @ file:///croot/mpmath_1690848262763/work
 msgpack==1.1.0
 multidict==6.1.0
@@ -52,7 +62,8 @@ multiprocess==0.70.16
 networkx @ file:///croot/networkx_1737039604450/work
 ninja==1.11.1.3
 nltk==3.9.1
-numpy==1.26.4
+numexpr==2.10.2
+numpy @ file:///croot/numpy_and_numpy_base_1725470312869/work/dist/numpy-2.0.1-cp311-cp311-linux_x86_64.whl#sha256=372b9067cf9c96d8662c6f20ef49eeda43f0f8d2f074820224c954d8d8fae7bc
 nvidia-cublas-cu12==12.4.5.8
 nvidia-cuda-cupti-cu12==12.4.127
 nvidia-cuda-nvrtc-cu12==12.4.127
@@ -70,6 +81,7 @@ nvidia-nvtx-cu12==12.4.127
 packaging==24.2
 pandas==2.2.3
 pathtools==0.1.2
+pathvalidate==3.2.3
 peft==0.4.0
 pillow @ file:///croot/pillow_1738010226202/work
 portalocker==3.1.1
@@ -78,11 +90,14 @@ protobuf==4.25.5
 psutil==6.1.1
 py-cpuinfo==9.0.0
 pyarrow==18.1.0
+pybind11==2.13.6
+pycparser @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_pycparser_1733195786/work
 pydantic==2.10.6
 pydantic_core==2.27.2
 Pygments==2.19.1
 pyparsing==3.2.1
 PySocks @ file:///work/ci_py311/pysocks_1676822712504/work
+pytablewriter==1.2.1
 python-dateutil==2.9.0.post0
 pytz==2024.2
 PyYAML @ file:///croot/pyyaml_1728657952215/work
@@ -101,8 +116,11 @@ sentry-sdk==2.19.2
 setproctitle==1.3.4
 six==1.17.0
 smmap==5.0.2
-sympy==1.13.1
+sqlitedict==2.1.0
+sympy @ file:///home/conda/feedstock_root/build_artifacts/sympy_1736248176451/work
+tabledata==1.3.4
 tabulate==0.9.0
+tcolorpy==0.1.7
 tenacity==9.0.0
 threadpoolctl==3.5.0
 tokenizers==0.13.3
@@ -111,13 +129,17 @@ torchaudio==2.5.1
 torchmetrics==1.6.1
 torchvision==0.20.1
 tqdm==4.67.1
+tqdm-multiprocess==0.0.11
 transformers==4.31.0
 triton==3.1.0
+typepy==1.3.4
 typeshed_client==2.7.0
 typing_extensions @ file:///croot/typing_extensions_1734714854207/work
 tzdata==2025.1
 urllib3==2.2.3
 wandb==0.15.3
+word2number==1.1
 xxhash==3.5.0
 yarl==1.18.3
 yattag==1.16.1
+zstandard==0.23.0

@@ -1,9 +1,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-import yaml
-import argparse
-
 from collections import defaultdict
 import copy
 import json
@@ -31,32 +28,53 @@ from transformers import (
     set_seed,
     Seq2SeqTrainer,
     BitsAndBytesConfig,
-    LlamaTokenizer
+    LlamaTokenizer,
+    EarlyStoppingCallback,
+    TrainerCallback
 
 )
-from datasets import load_dataset, Dataset, DatasetDict
-import evaluate
+from datasets import load_dataset, Dataset
+#from accelerate import Accelerator
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
-# task specific metrics
-from nltk.translate.bleu_score import corpus_bleu
+# Evaluation
 from evaluate import load
 sari = load("sari")
 bleu = load("bleu")
 rouge = load("rouge")
-from rouge_score import rouge_scorer
-from bert_score import score as bert_score
+bert_score = load("bertscore")
+import deepspeed
 
+from typing import List, Optional
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+import torch._dynamo
+import glob
 
-CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'configs'))
-    
+
+
 if torch.cuda.is_available():   
     torch.backends.cuda.matmul.allow_tf32 = True
 
+#from accelerate.utils import write_basic_config, DeepSpeedPlugin
+
+logging.basicConfig(
+    filename="train.log",  # ✅ Save logs to a file
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.StreamHandler())  # ✅ Ensures logs appear in console too
 
 IGNORE_INDEX = -100
-DEFAULT_PAD_TOKEN = "[PAD]"
+DEFAULT_PAD_TOKEN = "<pad>"
+DEFAULT_EOS_TOKEN = "</s>"
+DEFAULT_BOS_TOKEN = "<s>"
+DEFAULT_UNK_TOKEN = "<unk>"
+
+import sys
+print("Command-line arguments:", sys.argv)  # ✅ Shows exactly what `accelerate launch` is passing
 
 @dataclass
 class ModelArguments:
@@ -66,6 +84,10 @@ class ModelArguments:
     trust_remote_code: Optional[bool] = field(
         default=False,
         metadata={"help": "Enable unpickling of arbitrary code in AutoModelForCausalLM#from_pretrained."}
+    )
+    use_fast_tokenizer: Optional[bool] = field(
+        default=True,
+        metadata={"help": "Use a fast Rust-based tokenizer if it is supported for a given model. If a fast tokenizer is not available for a given model, a normal Python-based tokenizer is returned instead."}
     )
 
 
@@ -88,6 +110,13 @@ class DataArguments:
             "value if set."
         },
     )
+    max_test_samples: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "For debugging purposes or quicker training, truncate the number of prediction examples to this "
+            "value if set."
+        },
+    )
     source_max_len: int = field(
         default=1024,
         metadata={"help": "Maximum source sequence length. Sequences will be right padded (and possibly truncated)."},
@@ -104,6 +133,11 @@ class DataArguments:
         default=None,
         metadata={"help": "Which dataset format is used. [alpaca|chip2|self-instruct|hh-rlhf]"}
     )
+    
+    compute_bleu: Optional[bool] = field(default=False)
+    compute_sari: Optional[bool] = field(default=False)
+    compute_rouge: Optional[bool] = field(default=False)
+    compute_bert_score: Optional[bool] = field(default=False)
 
 @dataclass
 class TrainingArguments(transformers.Seq2SeqTrainingArguments):
@@ -112,10 +146,6 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         default=False,
         metadata={"help": "Whether to train on the input in addition to the target text."}
     )
-
-
-
-
     report_to: str = field(
         default='none',
         metadata={"help": "To use wandb or something else for reporting."}
@@ -138,7 +168,10 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     save_strategy: str = field(default='steps', metadata={"help": 'When to save checkpoints'})
     save_steps: int = field(default=250, metadata={"help": 'How often to save a model'})
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten'})
-    task: str = field(default='Simp', metadata={"help": 'The task basically.'})
+    torch_compile: bool = field(default=True, metadata={"help": "Enable torch.compile, see docs for details"})
+    torch_compile_backend: str = field(default="inductor", metadata={"help": "Choose backend for torch.compile"})
+    task: str = field(default='simp', metadata={"help": 'The task basically.'})
+    deepspeed: str = field(default=None, metadata={"help": "Path to DeepSpeed config file"})
 
 @dataclass
 class GenerationArguments:
@@ -171,54 +204,9 @@ class GenerationArguments:
     repetition_penalty: Optional[float] = field(default=1.0)
     length_penalty: Optional[float] = field(default=1.0)
     no_repeat_ngram_size: Optional[int] = field(default=0)
+    max_new_tokens: Optional[int] = field(default=256)
+    #max_length: Optional[int] = field(default=None)
 
-
-
-
-
-def get_accelerate_model(args, checkpoint_dir):
-
-
-
-
-    device_map = "auto"
-
-    # if we are in a distributed setting, we need to set the device map and max memory per device
-    if os.environ.get('LOCAL_RANK') is not None:
-        local_rank = int(os.environ.get('LOCAL_RANK', '0'))
-        device_map = {'': local_rank}
-
-
-    print(f'loading base model {args.model_name_or_path}...')
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name_or_path,
-        device_map=device_map,
-        trust_remote_code=args.trust_remote_code,
-    )
-
-
-
-
-    # Tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name_or_path,
-        padding_side="right",
-        use_fast=True, # Fast tokenizer giving issues.
-        trust_remote_code=args.trust_remote_code,
-    )
-    if tokenizer._pad_token is None:
-        special_tokens_dict = dict(pad_token=DEFAULT_PAD_TOKEN)
-        if args.dataset == "OpenAssistant/oasst_top1_2023-08-25":
-            chat_special_tokens = ["<|im_start|>", "<|im_end|>"]
-            special_tokens_dict.update(additional_special_tokens=chat_special_tokens)
-
-        smart_tokenizer_and_embedding_resize(
-            special_tokens_dict=special_tokens_dict,
-            tokenizer=tokenizer,
-            model=model
-        )
-
-    return model, tokenizer
 
 def print_trainable_parameters(args, model):
     """
@@ -259,62 +247,6 @@ def smart_tokenizer_and_embedding_resize(
         output_embeddings_data[-num_new_tokens:] = output_embeddings_avg
     print(f"Resized tokenizer and embedding to {len(tokenizer)} tokens.")
 
-#@dataclass
-#class DataCollatorForCausalLM(object):
-#    tokenizer: transformers.PreTrainedTokenizer
-#    source_max_len: int
-#    target_max_len: int
-#    train_on_source: bool
-#    predict_with_generate: bool
-#
-#    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-#        # Debugging: Ensure keys are present
-#        assert all('input' in instance and 'labels' in instance for instance in instances), \
-#            "Each instance must have 'input' and 'labels' keys."
-#
-#        # Extract elements
-#        sources = [f"{self.tokenizer.bos_token}{example['input']}" for example in instances]
-#        targets = [f"{example['labels']}{self.tokenizer.eos_token}" for example in instances]
-#
-#        # Tokenize
-#        tokenized_sources = self.tokenizer(
-#            sources,
-#            max_length=self.source_max_len,
-#            truncation=True,
-#            add_special_tokens=False,
-#        )
-#        tokenized_targets = self.tokenizer(
-#            targets,
-#            max_length=self.target_max_len,
-#            truncation=True,
-#            add_special_tokens=False,
-#        )
-#
-#        # Build input_ids and labels
-#        input_ids = []
-#        labels = []
-#        for tokenized_source, tokenized_target in zip(
-#            tokenized_sources['input_ids'], tokenized_targets['input_ids']
-#        ):
-#            combined_input = tokenized_source + tokenized_target
-#            if not self.predict_with_generate:
-#                input_ids.append(torch.tensor(combined_input))
-#                labels.append(
-#                        torch.tensor([IGNORE_INDEX] * len(tokenized_source) + tokenized_target)
-#                    )
-#            else:
-#                input_ids.append(torch.tensor(tokenized_source))
-#
-#        # Apply padding
-#        input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
-#        labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX) if not self.predict_with_generate else None
-#
-#        return {
-#            'input_ids': input_ids,
-#            'attention_mask': input_ids.ne(self.tokenizer.pad_token_id),
-#            'labels': labels
-#        }
-
 @dataclass
 class DataCollatorForCausalLM(object):
     tokenizer: transformers.PreTrainedTokenizer
@@ -326,7 +258,7 @@ class DataCollatorForCausalLM(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         # Extract elements
         sources = [f"{self.tokenizer.bos_token}{example['input']}" for example in instances]
-        targets = [f"{example['labels']}{self.tokenizer.eos_token}" for example in instances]
+        targets = [f"{example['output']}{self.tokenizer.eos_token}" for example in instances]
         # Tokenize
         tokenized_sources_with_prompt = self.tokenizer(
             sources,
@@ -398,6 +330,17 @@ ALPACA_PROMPT_DICT = {
     ),
 }
 
+def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: str):
+    """Collects the state dict and dump to disk."""
+    state_dict = trainer.model.state_dict()
+    if trainer.args.should_save:
+        cpu_state_dict = {key: value.cpu() for key, value in state_dict.items()}
+        del state_dict
+        trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
+
+def clean_text(text):
+    return text.replace('-RRB-', ')').replace('-LRB-', '(').replace('-RSB-', ']').replace('-LSB-', '[')
+
 def extract_alpaca_dataset(example):
     if example.get("input", "") != "":
         prompt_format = ALPACA_PROMPT_DICT["prompt_input"]
@@ -405,13 +348,22 @@ def extract_alpaca_dataset(example):
         prompt_format = ALPACA_PROMPT_DICT["prompt_no_input"]
     return {'input': prompt_format.format(**example)}
 
-def local_dataset(dataset_name):
+def local_dataset(dataset_name, args):
     if dataset_name.endswith('.json') or dataset_name.endswith('.jsonl'):
-        train_dataset = Dataset.from_json(path_or_paths=dataset_name, field='train')
-        eval_dataset = Dataset.from_json(path_or_paths=dataset_name, field='eval')
-        test_dataset = Dataset.from_json(path_or_paths=dataset_name, field='test')
-        full_dataset = {'train': train_dataset, 'eval': eval_dataset, 'test': test_dataset}
-        #full_dataset = Dataset.from_json(path_or_paths=dataset_name)
+        full_dataset = dict()
+        if args.do_train:
+            train_dataset = Dataset.from_json(path_or_paths=dataset_name, field='train')
+            full_dataset['train'] = train_dataset
+        if (args.do_eval and not args.do_predict):
+            eval_dataset = Dataset.from_json(path_or_paths=dataset_name, field='eval')
+            full_dataset['eval'] = eval_dataset
+        if args.do_predict:
+            test_dataset = Dataset.from_json(path_or_paths=dataset_name, field='test')
+            if args.task == 'simp':
+                print("Don't worry, filter is done!")
+                test_dataset = test_dataset.filter(lambda example: example["src_info"]["prompt_name"] == "simplification_1")
+            full_dataset['test'] = test_dataset
+            full_dataset['eval'] = test_dataset
     elif dataset_name.endswith('.csv'):
         full_dataset = Dataset.from_pandas(pd.read_csv(dataset_name))
     elif dataset_name.endswith('.tsv'):
@@ -446,18 +398,6 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         - vicuna
 
     """
-    # Map `output` to `labels` for training
-    def preprocess_labels(example):
-        SYSTEM_PROMPT = (
-            "Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request."
-        )
-        example["input"] = (
-        f"<<SYS>>\n{SYSTEM_PROMPT}\n<</SYS>>\n\n"
-        f"[INST]\n{example['input']}\n[/INST]\n"
-            )
-        example["labels"] = example["output"]
-        return example
-    
     def load_data(dataset_name):
         if dataset_name == 'alpaca':
             return load_dataset("tatsu-lab/alpaca")
@@ -476,12 +416,10 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         elif dataset_name == 'vicuna':
             raise NotImplementedError("Vicuna data was not released.")
         else:
-            print(f"Attempting to load dataset: {dataset_name}")
             if os.path.exists(dataset_name):
-                print(f"Dataset file found at: {dataset_name}")
                 try:
                     args.dataset_format = args.dataset_format if args.dataset_format else "input-output"
-                    full_dataset = local_dataset(dataset_name)
+                    full_dataset = local_dataset(dataset_name, args)
                     return full_dataset
                 except:
                     raise ValueError(f"Error loading dataset from {dataset_name}")
@@ -512,13 +450,35 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
                 'input': '',
                 'output': x['text'],
             })
+        elif dataset_format == 'prompt':
+            if isinstance(dataset, dict):  # If dataset is a DatasetDict (multiple splits)
+                for split in dataset.keys():
+                    dataset[split] = dataset[split].map(lambda x: {
+                'input': f"Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n{clean_text(x['input'])}\n\n### Response:",
+                'output': clean_text(x['output'])
+            })
+
+            else:
+                dataset = dataset.map(lambda x: {
+                    'input': f"Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n{clean_text(x['input'])}\n\n### Response:",
+                    'output': clean_text(x['output'])
+                })
+        
         elif dataset_format == 'input-output':
             # leave as is
             pass
-        # Remove unused columns.
-        #dataset = dataset.remove_columns(
-        #    [col for col in dataset.column_names['train'] if col not in ['input', 'output', 'labels']]
-        #)
+        # Check if dataset is a DatasetDict (dict-like object with splits)
+        if isinstance(dataset, dict):  # DatasetDict or similar
+            for split in dataset.keys():
+                if split != 'test':
+                    dataset[split] = dataset[split].remove_columns(
+                        [col for col in dataset[split].column_names if col not in ['input', 'output', 'labels']]
+                    )
+        else:  # Single Dataset
+            if split != 'test':
+                dataset = dataset.remove_columns(
+                    [col for col in dataset.column_names if col not in ['input', 'output', 'labels']]
+                )
         return dataset
 
      # Load dataset.
@@ -526,19 +486,9 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
     dataset = format_dataset(dataset, args.dataset_format)
  
     # Split train/eval, reduce size
-    if args.do_train:
-        print('DEBUGGER: args.do_train is running')
-        train_dataset = dataset['train']
-        train_dataset = train_dataset.map(preprocess_labels)  # Preprocess to include system prompt
-        if args.max_train_samples is not None and len(train_dataset) > args.max_train_samples:
-            train_dataset = train_dataset.select(range(args.max_train_samples))
-        if args.group_by_length:
-            train_dataset = train_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
-
-    if args.do_eval or args.do_predict:
+    if args.do_eval:
         if 'eval' in dataset:
             eval_dataset = dataset['eval']
-            eval_dataset = eval_dataset.map(preprocess_labels)  # Preprocess to include system prompt
         else:
             print('Splitting train dataset in train and validation according to `eval_dataset_size`')
             dataset = dataset["train"].train_test_split(
@@ -549,12 +499,19 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
             eval_dataset = eval_dataset.select(range(args.max_eval_samples))
         if args.group_by_length:
             eval_dataset = eval_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
-
+    if args.do_train:
+        train_dataset = dataset['train']
+        if args.max_train_samples is not None and len(train_dataset) > args.max_train_samples:
+            train_dataset = train_dataset.select(range(args.max_train_samples))
+        if args.group_by_length:
+            train_dataset = train_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
     if args.do_predict:
-        predict_dataset = dataset['test']
-        predict_dataset = predict_dataset.map(preprocess_labels)  # Preprocess to include system prompt
-        if args.max_eval_samples is not None:
-            predict_dataset = predict_dataset.select(range(args.max_eval_samples))
+        if 'test' in dataset:
+            test_dataset = dataset['test']
+            # temporary adjsutment
+            test_dataset = test_dataset
+        if args.max_test_samples is not None and len(test_dataset) > args.max_test_samples:
+            test_dataset = test_dataset.select(range(args.max_test_samples))
 
     data_collator = DataCollatorForCausalLM(
         tokenizer=tokenizer,
@@ -563,297 +520,374 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         train_on_source=args.train_on_source,
         predict_with_generate=args.predict_with_generate,
     )
-    #print('DEBUGGER: printing train data set row')
-    #print(train_dataset[0])
     return dict(
         train_dataset=train_dataset if args.do_train else None,
         eval_dataset=eval_dataset if args.do_eval else None,
-        predict_dataset=eval_dataset if args.do_predict else None,
+        predict_dataset=test_dataset if args.do_predict else None,
         data_collator=data_collator
     )
 
+import os
+from os.path import isdir, exists, join
+
 def get_last_checkpoint(checkpoint_dir):
-    if isdir(checkpoint_dir):
-        is_completed = exists(join(checkpoint_dir, 'completed'))
-        if is_completed: return None, True # already finished
-        max_step = 0
-        for filename in os.listdir(checkpoint_dir):
-            if isdir(join(checkpoint_dir, filename)) and filename.startswith('checkpoint'):
-                max_step = max(max_step, int(filename.replace('checkpoint-', '')))
-        if max_step == 0: return None, is_completed # training started, but no checkpoint
-        checkpoint_dir = join(checkpoint_dir, f'checkpoint-{max_step}')
-        print(f"Found a previous checkpoint at: {checkpoint_dir}")
-        return checkpoint_dir, is_completed # checkpoint found!
-    return None, False # first training
+    """Finds the latest checkpoint in a directory."""
+    if not isdir(checkpoint_dir):
+        return None, False  # First training, no checkpoint dir exists.
 
-def config_selection():
-    # Step 1: Select a configuration file
-    config_dir = CONFIG_DIR
-    print(config_dir)
-    configs = [f for f in os.listdir(config_dir) if f.endswith(".yaml")]
-    if not configs:
-        raise FileNotFoundError(f"No YAML configuration files found in {config_dir}")
+    is_completed = exists(join(checkpoint_dir, 'completed'))
+    if is_completed:
+        return None, True  # Training already finished.
 
-    print("Available configuration files:")
-    for idx, config in enumerate(configs):
-        print(f"{idx}: {config}")
-    
-    selected_idx = int(input("Select a configuration file by index: "))
-    if selected_idx < 0 or selected_idx >= len(configs):
-        raise ValueError("Invalid configuration index selected.")
-    
-    config_path = os.path.join(config_dir, configs[selected_idx])
-    print(f"Using configuration: {config_path}")
+    # Extract valid checkpoint numbers
+    checkpoint_steps = [
+        int(f.replace("checkpoint-", "")) for f in os.listdir(checkpoint_dir)
+        if f.startswith("checkpoint-") and f.replace("checkpoint-", "").isdigit()
+    ]
 
-    # Step 2: Load configuration
-    with open(config_path, "r") as file:
-        yaml_config = yaml.safe_load(file)
+    if not checkpoint_steps:
+        return None, is_completed  # Training started but no checkpoints yet.
 
-    return yaml_config
+    # Get the latest checkpoint
+    last_checkpoint = join(checkpoint_dir, f"checkpoint-{max(checkpoint_steps)}")
+    print(f"Found a previous checkpoint at: {last_checkpoint}")
+    return last_checkpoint, is_completed
 
-def compute_bleu_sari(predictions, references):
-    """
-    Compute BLEU and SARI for text simplification (Simp).
-    Args:
-        predictions (list of str): Simplified texts generated by the model.
-        references (list of list of str): Reference simplifications.
-        sources (list of str): Original source texts.
-    Returns:
-        dict: BLEU and SARI scores.
-    """
-    # Load the BLEU and SARI metrics
-    #bleu = load("bleu")
-    #sari = load("sari")
+def get_accelerate_model(args, checkpoint_dir):
+    device_map = None if True else "auto" # opt
 
-    # Compute BLEU score
-    bleu_score = bleu.compute(predictions=predictions, references=references)
+    if os.environ.get('LOCAL_RANK') is not None:
+        local_rank = int(os.environ.get('LOCAL_RANK', '0'))
+        if True:  # Ensure DeepSpeed doesn't use a device_map (opt)
+            device_map = {"": local_rank}
 
-    # Compute SARI score
-    #sari_score = sari.compute(sources=sources, predictions=predictions, references=references)
+    print(f'loading base model {args.model_name_or_path}...')
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name_or_path,
+        torch_dtype=torch.float16,
+        trust_remote_code=args.trust_remote_code,
+        #low_cpu_mem_usage=False,  # ❌ Disable (DeepSpeed Zero-3 incompatibility)
+        #device_map=device_map  # ❌ Remove (Handled by DeepSpeed)
+        )
 
-    #return {"bleu": bleu_score["bleu"], "sari": sari_score["sari"]}
-    return {"bleu": bleu_score["bleu"]}
-
-def compute_rouge(predictions, references):
-    """
-    Compute ROUGE score using the evaluate library.
-    Args:
-        predictions (list of str): Generated texts.
-        references (list of str): Reference texts.
-    Returns:
-        dict: ROUGE score rounded to 4 decimal places.
-    """
-    rouge = load("rouge")
-    rouge_score = rouge.compute(predictions=predictions, references=references)
-    return {"rouge": {key: round(value, 4) for key, value in rouge_score.items()}}
-
-def compute_bert_score(predictions, references):
-    """
-    Compute BERTScore for open-domain NLG tasks.
-    Args:
-        predictions (list of str): Generated texts.
-        references (list of list of str): List of reference texts.
-    Returns:
-        dict: BERTScore F1.
-    """
-    P, R, F1 = bert_score(predictions, references, lang='en', rescale_with_baseline=True)
-    return {"bertscore_f1": F1.mean().item()}
-
-def compute_metrics(eval_preds, eval_labels, tokenizer, task="Simp"):
-    """
-    Compute metrics using predictions, labels, and aligned normal_sentence.
-    Args:
-        pred: EvalPrediction containing predictions, labels, and inputs.
-        tokenizer: Tokenizer for decoding.
-        task: Task type (e.g., Simp for simplification).
-    """
-    # Extract batch predictions, labels, and inputs
-    logits = eval_preds
-    labels = eval_labels
-
-    # Decode predictions
-    pred_class = np.argmax(logits, axis=-1)
-    dec_preds = tokenizer.batch_decode(
-        pred_class, skip_special_tokens=True, clean_up_tokenization_spaces=True
+    # Tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name_or_path,
+        padding_side="right",
+        use_fast=args.use_fast_tokenizer,  # Allows toggling
+        trust_remote_code=args.trust_remote_code,
     )
+    special_tokens_dict = dict()
+    if tokenizer._pad_token is None:
+        special_tokens_dict['pad_token'] = DEFAULT_PAD_TOKEN
+    if tokenizer.eos_token is None:
+        special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
+    if tokenizer.bos_token is None:
+        special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
+    if tokenizer.unk_token is None:
+        special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
 
-    # Decode labels
-    labels = np.where(labels == -100, tokenizer.pad_token_id, labels)
-    dec_labels = tokenizer.batch_decode(
-        labels, skip_special_tokens=True, clean_up_tokenization_spaces=True
-    )
+    # Resize tokenizer only if new special tokens are added
+    if special_tokens_dict:
+        logger.info(f'Adding special_tokens_dict for {special_tokens_dict}')
+        smart_tokenizer_and_embedding_resize(
+            special_tokens_dict=special_tokens_dict,
+            tokenizer=tokenizer,
+            model=model
+        )
+        #tokenizer.save_pretrained(args.model_name_or_path)  # ✅ Save updated tokenizer
 
-    # Compute metrics
-    metrics = {}
-    if task == "Simp":
-        # Compute BLEU
-        bleu_score = bleu.compute(predictions=dec_preds, references=dec_labels)
-        rouge_score = rouge.compute(predictions=dec_preds, references=dec_labels)
+    return model, tokenizer
 
-        return {"bleu": bleu_score["bleu"], "rouge": rouge_score["rouge"]}
-    elif task == "HGen":
-        return compute_rouge(dec_preds, dec_labels)
-    else:
-        return compute_bert_score(dec_preds, dec_labels)
+def save_args(args, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Convert args to a dictionary
+    args_dict = vars(args)
+
+    # Convert `GenerationConfig` if present
+    if isinstance(args_dict.get("generation_config"), transformers.GenerationConfig):
+        args_dict["generation_config"] = args_dict["generation_config"].to_dict()
+
+    # Convert `PartialState` and other non-serializable objects to strings
+    for key, value in args_dict.items():
+        if not isinstance(value, (str, int, float, bool, list, dict, type(None))):
+            args_dict[key] = str(value)
+
+    with open(f"{output_dir}/run_config.json", "w") as f:
+        json.dump(args_dict, f, indent=4)
+
+    print(f"Arguments saved to {output_dir}/run_config.json")
+
+def log_model_distribution(model):
+    """Logs model parameter distribution across GPUs."""
+    device_count = torch.cuda.device_count()
+    logger.info(f"Number of GPUs Available: {device_count}")
+
+    for name, param in model.named_parameters():
+        logger.info(f"Param: {name} -> Device: {param.device}")
+import json
 
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
-        if self.args.predict_with_generate:
-            # Perform generation with all relevant parameters
-            generated_tokens = model.generate(
-                inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                max_length=getattr(self.args, "generation_max_length", 256),
-                num_beams=getattr(self.args, "num_beams", 1),
-                temperature=getattr(self.args, "temperature", 1.0),
-                top_k=getattr(self.args, "top_k", 50),
-                top_p=getattr(self.args, "top_p", 0.9),
-                length_penalty=getattr(self.args, "length_penalty", 1.0),  # Add length_penalty
-                eos_token_id=self.tokenizer.eos_token_id,
-            )
-            labels = inputs.get("labels")
-            return None, generated_tokens, labels
-        else:
-            # Default behavior for non-generation mode
-            return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+    def evaluation_loop(self, *args, **kwargs):
+        torch.cuda.empty_cache()  # Free unused GPU memory before evaluation
+        with torch.no_grad():  # Ensure no gradients are computed
+            return super().evaluation_loop(*args, **kwargs)
+    
+    def get_train_dataloader(self):
+        # Use DistributedSampler if training with multiple GPUs
+        sampler = DistributedSampler(self.train_dataset) if self.args.world_size > 1 else None
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.args.per_device_train_batch_size,
+            shuffle=False,  # Explicitly disable shuffling
+            sampler=sampler,
+            collate_fn=self.data_collator  # Use your data collator
+        )
 
+# Custom callback to delete optimizer states after saving
+class CleanupCallback(TrainerCallback):
+    def on_save(self, args, state, control, **kwargs):
+        """
+        Deletes optimizer checkpoint files from DeepSpeed checkpoints 
+        inside `checkpoint-*/global_step*` folders.
+        """
+        # Get all DeepSpeed checkpoint folders
+        checkpoint_dirs = sorted(glob.glob(os.path.join(args.output_dir, "checkpoint-*/global_step*")), 
+                                 key=os.path.getctime, reverse=True)
 
+        if not checkpoint_dirs:
+            print("No DeepSpeed checkpoints found for cleanup.")
+            return control
 
+        latest_checkpoint = checkpoint_dirs[0]  # Get the latest saved checkpoint
+
+        # Build file paths safely
+        optimizer_files = [
+            os.path.join(latest_checkpoint, "optimizer.pt"),
+            *glob.glob(os.path.join(latest_checkpoint, "*_optim_states.pt")),
+        ]
+
+        deleted_count = 0
+        for file in optimizer_files:
+            try:
+                os.remove(file)
+                print(f"🗑 Deleted: {file}")
+                deleted_count += 1
+            except Exception as e:
+                print(f"⚠️ Error deleting {file}: {e}")
+
+        # Print summary
+        if deleted_count > 0:
+            print(f"Deleted {deleted_count} optimizer-related files from: {latest_checkpoint}")
+
+        return control
+    
 def train():
-    yaml_config = config_selection()
-
-    print(f'Is CUDA available: {torch.cuda.is_available()}')
-
-    # Step 3: Parse arguments
+    torch.cuda.empty_cache()  # Clear old GPU allocations
+    deepspeed.init_distributed()
+    torch._dynamo.config.optimize_ddp = False
     hfparser = transformers.HfArgumentParser((
         ModelArguments, DataArguments, TrainingArguments, GenerationArguments
     ))
-
-    # Convert YAML config to argument strings
-    arg_strings = []
-    for key, value in yaml_config.items():
-        arg_strings.append(f"--{key}")
-        arg_strings.append(str(value))
-
-    # Parse arguments into dataclasses
-    model_args, data_args, training_args, generation_args, extra_args = hfparser.parse_args_into_dataclasses(
-        return_remaining_strings=True, args=arg_strings
-    )
-
+    model_args, data_args, training_args, generation_args, extra_args = \
+        hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
     training_args.generation_config = transformers.GenerationConfig(**vars(generation_args))
     args = argparse.Namespace(
         **vars(model_args), **vars(data_args), **vars(training_args)
     )
-    print("Parsed arguments:", args)
-    training_args.include_inputs_for_metrics=True
-    # Step 4: Proceed with the rest of the training logic
+
+    # Load DeepSpeed config manually
+    #training_args.deepspeed = create_ds_config(training_args)  # ✅ Auto-generate DeepSpeed config    
+    #ds_plugin = DeepSpeedPlugin(hf_ds_config=training_args.deepspeed)
+        
     checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir)
     if completed_training:
-        print("Detected that training was already completed!")
+        logger.info("Detected that training was already completed!")
 
     model, tokenizer = get_accelerate_model(args, checkpoint_dir)
+
     model.config.use_cache = False
-    print("Loaded model")
+    logger.info("Loaded model")
     set_seed(args.seed)
+    logger.info(f"Deepspeed config: {args.deepspeed}")
+
     data_module = make_data_module(tokenizer=tokenizer, args=args)
     task = args.task
+
+    # Saving all arguments
+    save_args(args, training_args.output_dir)
 
     trainer = CustomSeq2SeqTrainer(
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        **{k: v for k, v in data_module.items() if k != "predict_dataset"},
-        compute_metrics=lambda p: compute_metrics(
-            eval_preds=p.predictions,
-            eval_labels = p.label_ids,
-            tokenizer=tokenizer,
-            task=task  # Dynamically fetched from the config
-        ),
+        **{k:v for k,v in data_module.items() if k != 'predict_dataset'},
+        callbacks=[CleanupCallback()]
+
+        #compute_metrics=lambda p: compute_metrics(
+        #    eval_preds=p.predictions,
+        #    eval_labels = p.label_ids,
+        #    tokenizer=tokenizer,
+        #    task=task  # Dynamically fetched from the config
+        #)
     )
-    print('Trainer is created!')
+    logger.info("Trainer is created!")
+    logger.info(f"Number of GPUs Trainer sees: {trainer.args.n_gpu}")
 
     # Verifying the datatypes and parameter counts before training.
     print_trainable_parameters(args, model)
+    # Ensure model is unwrapped if DeepSpeed is used
+    if hasattr(model, "module"):  
+        model = model.module  
+
+    # Check if parameters exist
     dtypes = {}
-    for _, p in model.named_parameters():
+    for name, p in model.named_parameters():
         dtype = p.dtype
-        if dtype not in dtypes: dtypes[dtype] = 0
-        dtypes[dtype] += p.numel()
-    total = 0
-    for k, v in dtypes.items(): total += v
-    for k, v in dtypes.items():
-        print(k, v, v / total)
+        dtypes[dtype] = dtypes.get(dtype, 0) + p.numel()
+
+    total_params = sum(dtypes.values()) or 1  # Prevents division by zero
+    if total_params == 1:
+        logger.warning("⚠️ No parameters found. Check if DeepSpeed Zero-3 is offloading the model.")
+
+    for dtype, count in dtypes.items():
+        logger.info(f"{dtype}: {count} ({count/total_params:.2%})")
 
     all_metrics = {"run_name": args.run_name}
+
     # Training
     if args.do_train:
         logger.info("*** Train ***")
+        print(f'device_count = {torch.cuda.device_count()}')
         logger.info(f"Training dataset size: {len(data_module['train_dataset']) if data_module['train_dataset'] else 0}")
-        print(f"Training dataset size: {len(data_module['train_dataset']) if data_module['train_dataset'] else 0}")
         logger.info(f"Evaluation dataset size: {len(data_module['eval_dataset']) if data_module['eval_dataset'] else 0}")
-        print(f"Evaluation dataset size: {len(data_module['eval_dataset']) if data_module['eval_dataset'] else 0}")
+        # Prepare model & optimizer with Accelerator
+        #accelerator = Accelerator(deepspeed_plugin=ds_plugin)
+        #model, trainer.optimizer = accelerator.prepare(
+        #    model, trainer.optimizer
+        #)
+        
+
+        #trainer.training_step = custom_training_step.__get__(trainer)
+        
+        ## Log device after model distribution
+        #logger.info("Logging model device placement AFTER Accelerator.prepare():")
+        #log_model_distribution(model)
+        
+        # Note: `resume_from_checkpoint` not supported for adapter checkpoints by HF.
+        # Currently adapter checkpoint is reloaded as expected but optimizer/scheduler states are not.
         train_result = trainer.train()
         metrics = train_result.metrics
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
         all_metrics.update(metrics)
-    # Evaluation
-    if args.do_eval:
-        logger.info("*** Evaluate ***")
-        print('are we in evaluate?')
-        metrics = trainer.evaluate(metric_key_prefix="eval")
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-        all_metrics.update(metrics)
+
     # Prediction
     if args.do_predict:
         logger.info("*** Predict ***")
-        if 'labels' not in data_module['predict_dataset'].column_names:
-            logger.warning("No 'labels' column found in prediction dataset. Metrics like BLEU may not work.")
+        logger.info(f"Test dataset size: {len(data_module['predict_dataset']) if data_module['predict_dataset'] else 0}")
+        if args.do_eval:
+            metrics = trainer.evaluate(metric_key_prefix="eval")
+            trainer.log_metrics("eval", metrics)
+            trainer.save_metrics("eval", metrics)
+            all_metrics.update(metrics)
 
-        logger.info(f"Prediction dataset size: {len(data_module['predict_dataset']) if data_module['predict_dataset'] else 0}")
-        #data_module['predict_dataset'] = data_module['predict_dataset'].select(range(50))
         prediction_output = trainer.predict(
-            test_dataset=data_module['predict_dataset'], 
-            metric_key_prefix="predict"
-        )
-
+            test_dataset=data_module['predict_dataset'],
+            metric_key_prefix="predict",
+            eos_token_id=tokenizer.eos_token_id,
+            bos_token_id=tokenizer.bos_token_id,
+            pad_token_id=tokenizer.eos_token_id
+            )
         prediction_metrics = prediction_output.metrics
         predictions = prediction_output.predictions
         predictions = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
-        decoded_predictions = tokenizer.batch_decode(
+        predictions = tokenizer.batch_decode(
             predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
-        for i, prediction in enumerate(predictions[:5]):
-            print(f"Prediction {i}: {prediction}")
+        
+        # ✅ Extract predictions without input text more robustly
+        #predictions_wo_input = []
+        #for i, example in enumerate(data_module["predict_dataset"]):
+        #    input_text = example["input"]
+#
+        #    # 🔹 Strip the input part based on token count instead of replace()
+        #    input_tokens = tokenizer(input_text, return_tensors="pt")["input_ids"].shape[1]  # Get token length of input
+        #    pred_tokens = tokenizer(predictions[i], return_tensors="pt")["input_ids"]  # Tokenize prediction
+#
+        #    # 🔹 Extract only the newly generated tokens
+        #    generated_tokens = pred_tokens[:, input_tokens:].squeeze(0)  # Remove input tokens from prediction
+        #    clean_prediction = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+#
+        #    predictions_wo_input.append(clean_prediction)
 
-        # Get references from the dataset
-        references = [
-            [entry["simple_sentence"]] for entry in data_module["predict_dataset"]["src_info"]
-        ]
+        # new method for prompting
+        predictions_wo_input = []
+        for i, example in enumerate(data_module["predict_dataset"]):
+            input_text = example["input"]
 
-        # Compute BLEU score
-        bleu_score = compute_bleu_sari(predictions=decoded_predictions, references=references)
-        logger.info(f"BLEU Score: {bleu_score['bleu']}")
-        sources = [entry["normal_sentence"] for entry in data_module["predict_dataset"]["src_info"]]
-        sari_score = sari.compute(sources=sources, predictions=decoded_predictions, references=references)
-        logger.info(f"SARI Score: {sari_score['sari']}")
+            # 🔹 Split on "### Response:" to extract the generated response
+            if "### Response:" in predictions[i]:
+                clean_prediction = predictions[i].split("### Response:", 1)[-1].strip()
+            else:
+                clean_prediction = predictions[i].strip()  # Fallback: if "### Response:" is missing
 
-        # Save predictions and BLEU score to a file
+            predictions_wo_input.append(clean_prediction)
+
+
+        # ✅ Save predictions to JSONL
         with open(os.path.join(args.output_dir, 'predictions.jsonl'), 'w') as fout:
-            for i, example in enumerate(data_module['predict_dataset']):
-                example['prediction_with_input'] = decoded_predictions[i].strip()
-                example['prediction'] = decoded_predictions[i].replace(example['input'], '').strip()
-                fout.write(json.dumps(example) + '\n')
+            for i, example in enumerate(data_module["predict_dataset"]):
+                example["prediction_with_input"] = predictions[i].strip()
+                example["prediction"] = predictions_wo_input[i]
+                fout.write(json.dumps(example) + "\n")
 
-        # Add BLEU score to metrics
-        prediction_metrics['bleu'] = bleu_score['bleu']
-        prediction_metrics['sari'] = sari_score['sari']
+        # ✅ Get references from the dataset
+        if task.lower() == 'simp': 
+            references = [
+                [entry["simple_sentence"]] for entry in data_module["predict_dataset"]["src_info"]
+            ]
+        elif task.lower() == 'empd':
+            references = [
+                [entry["output_text"]] for entry in data_module["predict_dataset"]["src_info"]
+            ]
+        elif task.lower() == 'inqqg':
+            references = [
+                [entry["question"] for entry in data_module["predict_dataset"]["src_info"]]
+            ]
+
+        if args.compute_bleu:
+            bleu_score = bleu.compute(predictions = predictions_wo_input, references=references)
+            all_metrics.update({'bleu': bleu_score['bleu']})
+        if args.compute_rouge:
+            rouge_score = rouge.compute(predictions=predictions_wo_input, references=references)
+            all_metrics.update(
+                {'rouge1': rouge_score['rouge1'],
+                'rouge2': rouge_score['rouge2'],
+                'rougeL': rouge_score['rougeL']}
+                )
+        if args.compute_bert_score:
+            bscore = bert_score.compute(predictions=predictions_wo_input, references=references, lang='en')
+            all_metrics.update(
+                {"bertscore_f1": np.mean(bscore['f1']),
+                    "bertscore_P": np.mean(bscore['precision']),
+                    "bertscore_R": np.mean(bscore['recall'])}
+                )
+        if args.compute_sari:
+            sources = [entry["normal_sentence"] for entry in data_module["predict_dataset"]["src_info"]]
+            sari_score = sari.compute(sources=sources, predictions=predictions_wo_input, references=references)
+            all_metrics.update({'sari': sari_score['sari']})
 
         trainer.log_metrics("predict", prediction_metrics)
         trainer.save_metrics("predict", prediction_metrics)
         all_metrics.update(prediction_metrics)
+        print(all_metrics)
+
+    if (args.do_train or args.do_eval or args.do_predict):
+        with open(os.path.join(args.output_dir, "metrics.json"), "w") as fout:
+            fout.write(json.dumps(all_metrics))
 
 if __name__ == "__main__":
     train()
