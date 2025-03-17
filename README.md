@@ -78,6 +78,7 @@ gradual-growth-vs-naive-learning/
      conda activate gradual-growth-env
      ```
 
+PS: Two environment have been created to keep finetuning process safe. For evaluation with [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness), use reuqirements_evaluator.txt
 ---
 
 ## Usage
@@ -182,5 +183,3 @@ Detailed results, including metrics like accuracy and r@1 scores, are stored in 
 
 ## Contact
 For questions or collaboration, contact [Ege Süalp](mailto:e.sualp@campus.lmu.de).
-
-
