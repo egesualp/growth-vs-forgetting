@@ -4,6 +4,7 @@ This repository contains the implementation and experiments for comparing **grad
 
 keywords: probabilistic continuous learning, deterministic and probabilistic fine tuning, catastrophic forgetting, model growth, g_stack, decoder-only
 
+Paper: [TBU]
 ---
 
 ## Objectives
@@ -13,6 +14,22 @@ keywords: probabilistic continuous learning, deterministic and probabilistic fin
 3. Analyze how these methods mitigate catastrophic forgetting when revisiting the same task and dataset over time. (Done)
 
 ---
+
+## Abstract
+
+Model growth is a promising strategy by utilizing smaller models to expedite the training of larger models. However, its role in continual learning remains largely unexplored. This study aims to investigate whether models, which are pre-trained with model growth method, are able to mitigate catastrophic forgetting under continual instruction tuning, focusing on domain knowledge, reasoning, reading comprehension and bias. Our analysis shows that both models improves in domain knowledge in continual fine-tuning, but declines in Reasoning and Reading Comprehension suggest signs of catastrophic forgetting, where new learning interferes with previously acquired skills. While these differences are relatively small, StackLLM consistently shows less degradation—especially in Reading Comprehension—compared to LLM, supporting our goal of assessing whether StackLLM mitigates forgetting. Yet, in terms of bias handling, continual fine-tuning makes the LLM progressively more neutral, reducing stereotypical responses, while StackLLM shows only slight fluctuations around 60–61\%.
+
+## Analysis in a nutshell
+
+![Forgetting by Categories](./notebooks/plots/fg_by_categories.png)
+
+This study explores how models pretrained with model growth techniques perform in a continual learning setting, particularly in mitigating catastrophic forgetting. Our findings show that training without regularization and using a constant learning rate leads to overfitting, where the model memorizes training data. We also discuss ways to address this issue with warm-up and scheduler strategies packed with weight decay. Across both setups, the stacked model slightly outperforms the naive LLM. Benchmark evaluations after each learning task indicate that both models improve (on average) in domain knowledge as they acquire new tasks. However, both also experience gradual declines in reading comprehension and reasoning, with the stacked model retaining more information than the naive LLM. Interestingly, while the naive LLM reduces bias with each new task, the stacked model shows less adjustment in its biased outputs. We also discuss the reasons behind this behavior in biased subject breakdowns. These findings highlight key areas for further research, including how StackLLM can better prevent forgetting in specific domains and why the naive model adapts more effectively in reducing bias.
+
+![Evaluation over Tasks](./notebooks/plots/evaluation_over_task.png)
+
+ Bias in details: We examine the sub-tasks of CrowsPairs in detail. Overall, continual learning has reduced the bias ratio across all sub-tasks for the LLM model, with particularly notable decreases in the Religion, Sexual Orientation, and Others categories. In contrast, for StackLLM, these categories appear to have been adversely affected by continual learning, resulting in a stagnated overall bias average. Although StackLLM shows reduced bias in some categories (e.g., Physical Appearance), its overall bias ratio remains unchanged. This result leads us a further research direction about how and why bias is handled by stacked models. 
+
+![Bias tasks](./notebooks/plots/heatmap_bias.png)
 
 ## Repository Structure
 
@@ -74,31 +91,31 @@ Then, you can run fine-tuning process using shell script. Don't forget to set da
 ```bash
 cd src/utils
 
-deepspeed --num_gpus=6 finetune.py \
+deepspeed --num_gpus=6 finetune_v3.py \
     --model_name_or_path "llm-stacking/LLM_7B_300BToken" \
     --dataset "../../data/preprocessed/simp_wiki_auto_new.json" \
     --dataset_format "prompt" \
-	  --output_dir "/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/models/llm_7b_m1_prompt" \
-	  --run_name "llm_7b_m1_prompt_exp2" \
+	--output_dir "/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/models/llm_7b_m1_prompt" \
+	--run_name "llm_7b_m1_prompt_exp2" \
     --num_train_epochs 3 \
     --max_steps -1 \
-	  --per_device_train_batch_size 8 \
-	  --gradient_accumulation_steps 1 \
+	--per_device_train_batch_size 8 \
+	--gradient_accumulation_steps 1 \
     --per_device_eval_batch_size 4 \
     --eval_accumulation_steps 16 \
-	  --save_strategy 'epoch' \
+	--save_strategy 'epoch' \
     --evaluation_strategy 'steps' \
     --eval_steps 300 \
-  	--save_total_limit 1 \
-	  --learning_rate 2e-5 \
+	--save_total_limit 1 \
+	--learning_rate 2e-5 \
     --logging_steps 150 \
-	  --lr_scheduler_type 'constant' \
+	--lr_scheduler_type 'constant' \
     --gradient_checkpointing true \
     --deepspeed 'ds_config_3.json' \
     --bf16 true \
     --report_to "wandb" \
     --logging_first_step true \
-	  --seed 42 \
+	--seed 42 \
     --do_train true \
     --do_eval true \
     --do_predict false \
@@ -109,7 +126,7 @@ deepspeed --num_gpus=6 finetune.py \
 ```
 
 ### 2. Test Models
-You can also test the model' inference performance using the same script above, with different arguments
+You can also test the model' inference performance using the same script above, with different arguments. You can also measure available metrics using related arguments (i.e. compute_sari, compute_rouge, compute_blue)
 
 ```bash
 deepspeed --num_gpus=4 finetune_v3.py \
@@ -142,12 +159,18 @@ deepspeed --num_gpus=4 finetune_v3.py \
 ```
 ### 3. Evaluate Models (Benchmark tasks)
 
-We have used lm-evaluation-harness to assess whether catastrophic forgetting. Each model has been evaluated iteratively with one shell script. Please refer to llm_eval_tasks.sbatch or stack_eval_tasks.sbatch.
+We have used [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) to assess whether catastrophic forgetting occurs.  
+Each model has been evaluated iteratively with one shell script.  
+
+Please refer to:
+- [`llm_eval_tasks.sbatch`](./experiments/configs/llm_eval_tasks.sbatch)
+- [`stack_eval_tasks.sbatch`](./experiments/configs/stack_eval_tasks.sbatch)
+
 
 ### 4. Visualize Results
 Use the provided Jupyter notebooks:
 ```bash
-jupyter notebook notebooks/results_visualization.ipynb
+jupyter notebook notebooks/evaluation_results.ipynb
 ```
 
 ---
