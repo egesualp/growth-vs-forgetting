@@ -97,27 +97,27 @@ deepspeed --num_gpus=6 finetune_v3.py \
     --model_name_or_path "llm-stacking/LLM_7B_300BToken" \
     --dataset "../../data/preprocessed/simp_wiki_auto_new.json" \
     --dataset_format "prompt" \
-	--output_dir "/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/models/llm_7b_m1_prompt" \
-	--run_name "llm_7b_m1_prompt_exp2" \
+    --output_dir "/dss/dssmcmlfs01/pr74ze/pr74ze-dss-0001/ra95kix2/models/llm_7b_m1_prompt" \
+    --run_name "llm_7b_m1_prompt_exp2" \
     --num_train_epochs 3 \
     --max_steps -1 \
-	--per_device_train_batch_size 8 \
-	--gradient_accumulation_steps 1 \
+    --per_device_train_batch_size 8 \
+    --gradient_accumulation_steps 1 \
     --per_device_eval_batch_size 4 \
     --eval_accumulation_steps 16 \
-	--save_strategy 'epoch' \
+    --save_strategy 'epoch' \
     --evaluation_strategy 'steps' \
     --eval_steps 300 \
-	--save_total_limit 1 \
-	--learning_rate 2e-5 \
+    --save_total_limit 1 \
+    --learning_rate 2e-5 \
     --logging_steps 150 \
-	--lr_scheduler_type 'constant' \
+    --lr_scheduler_type 'constant' \
     --gradient_checkpointing true \
     --deepspeed 'ds_config_3.json' \
     --bf16 true \
     --report_to "wandb" \
     --logging_first_step true \
-	--seed 42 \
+    --seed 42 \
     --do_train true \
     --do_eval true \
     --do_predict false \
